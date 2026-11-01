@@ -1,0 +1,12 @@
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+.idea/
+*.iml
+# Generated native artifacts (regenerate with scripts/vendor.sh)
+vendor/
+# Toolchains and pinned source (see README Pinning section)
+toolchain/
+third_party/

@@ -1,0 +1,136 @@
+# ghostty-android
+
+Native Android terminal emulator built directly on
+[libghostty-vt](https://github.com/ghostty-org/ghostty) — Ghostty's core
+terminal state machine — with a thin JNI shim, a Canvas dirty-row renderer,
+and a PTY transport. No Flutter, no React Native: Kotlin + NDK only.
+
+## Architecture
+
+```
+┌────────────────────────── Android app process ──────────────────────────┐
+│                                                                          │
+│  TerminalSession ──── main thread ──── GhosttyTerminalView               │
+│      │  (orchestration)                  (Canvas renderer + input)       │
+│      │                                        │                            │
+│  Pty (reader thread, blocking read)          NativeTerminal (JNI)        │
+│      │                                        │                            │
+│      └────────── bytes ────────► ghostty_jni.cpp ──► libghostty-vt.a     │
+│              ◄──── replies ─────  (thin C shim)                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Data flow, one direction per arrow:
+
+- **PTY output → grid**: `Pty.nativeRead` (reader thread) → chunk handed to
+  main thread → `GhosttyTerminalView.feed()` → `NativeTerminal.nativeWrite`
+  → `ghostty_terminal_vt_write` updates screen/scrollback state. Any bytes
+  the terminal wants back on the PTY (query replies, DSR) are returned by
+  `nativeWrite` and written to the PTY.
+- **Grid → pixels**: `onDraw` calls `nativeSnapshot`, which flattens only
+  dirty viewport rows into a direct `ByteBuffer` (documented binary layout
+  at the top of `ghostty_jni.cpp`). Kotlin paints those rows into a bitmap —
+  zero per-cell JNI calls.
+- **Input → PTY**: IME `commitText` sends UTF-8; hardware keys go through
+  `ghostty_key_encoder` (respects DECCKM / Kitty keyboard protocol as the
+  running program toggles them). Resizes go to both the terminal (reflow)
+  and the PTY (`TIOCSWINSZ` → SIGWINCH).
+
+libghostty-vt provides: VT parsing, screen + scrollback state, selection,
+paste safety/encoding, key/mouse encoding. It does **not** provide a
+renderer or PTY — those live in this repo on purpose.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `app/src/main/cpp/ghostty_jni.cpp` | Terminal core shim: session handle, snapshot flattening, key encode, selection, paste |
+| `app/src/main/cpp/pty_jni.cpp` | PTY transport: `posix_openpt`/fork/exec, read/write/resize/signals |
+| `app/src/main/java/.../NativeTerminal.kt` | JNI declarations for the terminal core |
+| `app/src/main/java/.../Pty.kt` | JNI declarations + typed wrapper for the PTY |
+| `app/src/main/java/.../GhosttyTerminalView.kt` | Canvas renderer, scroll, IME, hardware keys, long-press copy |
+| `app/src/main/java/.../TerminalSession.kt` | Owns terminal + PTY + reader thread; main-thread discipline |
+| `app/src/main/java/.../MainActivity.kt` | Minimal wiring demo |
+| `vendor/{arm64-v8a,x86_64}/libghostty-vt.a` + `vendor/include/` | Prebuilt libghostty-vt (generated; see below) |
+| `third_party/ghostty` | Shallow clone at the pinned commit |
+| `toolchain/zig` | Zig 0.15.2 (ghostty pins the minor) |
+| `scripts/vendor.sh` | Rebuilds `vendor/` from `third_party/ghostty` |
+| `scripts/host-smoke.c` / `.sh` | Host-side verification: runs the vendored lib through vt_write/resize/formatter/key-encoder and prints the screen |
+
+## Pinning
+
+libghostty-vt's C ABI is **not stable yet** (upstream says so in
+`include/ghostty/vt.h`). This project pins:
+
+- ghostty commit `b0947378349eff70f7030dda0e6d022fae1e6fbd`
+- Zig `0.15.2`, NDK `27.1.12297006`, `-Dsimd=false`, `ReleaseFast`
+
+Bumping the pin means: re-clone `third_party/ghostty` at the new commit,
+rerun `scripts/vendor.sh`, and fix whatever the shim compile now rejects
+(NDK `clang++ -DGHOSTTY_STATIC -Ivendor/include -c` is the fast check).
+
+Bootstrap `third_party/ghostty` from scratch (fresh clone of this repo):
+
+```sh
+mkdir -p third_party && git -C third_party init -q ghostty \
+  && git -C third_party/ghostty remote add origin https://github.com/ghostty-org/ghostty.git \
+  && git -C third_party/ghostty fetch -q --depth 1 origin b0947378349eff70f7030dda0e6d022fae1e6fbd \
+  && git -C third_party/ghostty checkout -q FETCH_HEAD
+```
+
+## Build
+
+Requirements: JDK 17, Android SDK (platform 36), NDK 27.1.12297006.
+`toolchain/zig` and `third_party/ghostty` must be present (see Pinning).
+
+```sh
+./toolchain/gradle/bin/gradle assembleDebug
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+To rebuild the vendored libs from source:
+
+```sh
+./scripts/vendor.sh
+```
+
+## Verification
+
+- `scripts/host-smoke.sh` — builds the vendored lib for the host and runs it
+  through the exact API path the shim uses (VT writes, cursor movement, EL,
+  scrollback, resize reflow, plain-text formatting, key encoding).
+- On emulator (arm64/x86_64 image, API 35): installed and driven with
+  `adb shell input` — PTY prompt renders, typed commands execute, output and
+  fresh prompt render correctly, IME input and insets behave.
+
+## Notes / gotchas learned building this
+
+- **Main-thread discipline**: the native session has no locks; every
+  `NativeTerminal` call happens on the main thread. The PTY reader thread
+  only hands byte chunks over (`Handler.post`).
+- **Write-before-first-layout**: the terminal exists (and accepts
+  `vt_write`) before the view lays out; the grid resizes when the view
+  does, so early output is never lost.
+- **x86_64 TLS**: Zig emits general-dynamic TLS there; bionic only exports
+  `__tls_get_addr` from API 29, so `minSdk=29` and a linker `-z undefs`
+  override. arm64 is unaffected.
+- **16 KB pages**: Android 15+ requires `max-page-size=16384` on the shim
+  (CMake handles it).
+- **Callbacks are synchronous**: effects (`WRITE_PTY`, bell, title) fire
+  *during* `vt_write`; they never re-enter the terminal and only record
+  flags/bytes.
+- **Snapshot runs, not cells**: the snapshot's per-row cell records share one
+  UTF-16 blob; draw contiguous same-style runs (`runLen`), never a single
+  cell's text — the first renderer draft drew one char per row and the
+  screen looked empty.
+- **Cursor blink** is caller-driven: the snapshot reports `blinking`, the
+  view re-invalidates every ~530 ms while it holds.
+
+## Not yet implemented (obvious next steps)
+
+- Touch selection with drag handles (long-press word copy exists)
+- Clipboard paste from the app UI (paste encode/safety already wired natively)
+- Nerd Font symbols for private-use glyph cells
+- Mouse reporting for TUI apps (`ghostty_mouse_*` API)
+- Fling physics on scrollback (plain drag today)
+- Multi-session/tabs
