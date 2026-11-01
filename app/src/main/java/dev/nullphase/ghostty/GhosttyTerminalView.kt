@@ -23,6 +23,23 @@ import kotlin.concurrent.thread
 import kotlin.math.roundToInt
 
 /**
+ * What the view needs from a byte transport: local PTY ([TerminalSession])
+ * or a herdr-core attach channel ([dev.nullphase.ghostty.hc.HcTerminalSession]).
+ */
+interface TerminalLink {
+    /** Bytes destined for the program (typed input, query replies). */
+    fun send(bytes: ByteArray)
+
+    fun sendUtf8(text: String) = send(text.toByteArray(Charsets.UTF_8))
+
+    /** Grid size changed; transport resizes its side. */
+    fun onGridResized(cols: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int)
+
+    fun onTitleChanged(title: ByteArray?) {}
+    fun onBellReceived() {}
+}
+
+/**
  * Terminal rendering surface. Owns the dirty-row Canvas bitmap that
  * nativeSnapshot patches, the touch/scroll handling, IME input, and hardware
  * key encoding. All state mutations happen on the main thread.
@@ -64,7 +81,7 @@ class GhosttyTerminalView @JvmOverloads constructor(
         const val BLINK_MS = 530L
     }
 
-    internal var session: TerminalSession? = null
+    internal var link: TerminalLink? = null
     internal var handle: Long = 0
 
     private var fontSizeSp = 14f
@@ -108,10 +125,14 @@ class GhosttyTerminalView @JvmOverloads constructor(
         computeMetrics()
     }
 
-    internal fun attach(handle: Long, session: TerminalSession) {
+    internal fun attach(handle: Long, link: TerminalLink) {
         this.handle = handle
-        this.session = session
+        this.link = link
     }
+
+    /** Cell size in pixels, for herdr-core display facts. */
+    internal fun cellWidthPx() = cellW
+    internal fun cellHeightPx() = cellH
 
     var fontSize: Float
         get() = fontSizeSp
@@ -161,7 +182,7 @@ class GhosttyTerminalView @JvmOverloads constructor(
         rows = newRows
         ensureBuffers()
         pinned = true
-        session?.onGridResized(cols, rows, cellW, cellH)
+        link?.onGridResized(cols, rows, cellW, cellH)
         invalidate()
     }
 
@@ -170,14 +191,14 @@ class GhosttyTerminalView @JvmOverloads constructor(
     /** Feed PTY output into the terminal. Main thread only. */
     internal fun feed(bytes: ByteArray) {
         if (handle == 0L) return
-        NativeTerminal.nativeWrite(handle, bytes)?.let { session?.send(it) }
+        NativeTerminal.nativeWrite(handle, bytes)?.let { link?.send(it) }
 
         val events = NativeTerminal.nativeTakeEventFlags(handle)
         if (events and NativeTerminal.EVENT_TITLE != 0) {
-            session?.onTitleChanged(NativeTerminal.nativeGetTitle(handle))
+            link?.onTitleChanged(NativeTerminal.nativeGetTitle(handle))
         }
         if (events and NativeTerminal.EVENT_BELL != 0) {
-            session?.onBellReceived()
+            link?.onBellReceived()
         }
         if (pinned) NativeTerminal.nativeScrollToBottom(handle)
         scrollbar = NativeTerminal.nativeScrollbar(handle)
@@ -460,12 +481,12 @@ class GhosttyTerminalView @JvmOverloads constructor(
     private inner class TerminalInputConnection :
         BaseInputConnection(this@GhosttyTerminalView, false) {
         override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-            session?.sendUtf8(text.toString())
+            link?.sendUtf8(text.toString())
             return true
         }
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            repeat(beforeLength.coerceAtMost(64)) { session?.send(byteArrayOf(0x7f)) }
+            repeat(beforeLength.coerceAtMost(64)) { link?.send(byteArrayOf(0x7f)) }
             return true
         }
     }
@@ -480,8 +501,37 @@ class GhosttyTerminalView @JvmOverloads constructor(
         return inputConnection
     }
 
+    /** Encode a hardware key through libghostty's key encoder (DECCKM /
+     * Kitty-keyboard aware) and hand the escape bytes to the link. */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (handle != 0L && session?.sendKey(event) == true) return true
+        if (handle != 0L && event.action == KeyEvent.ACTION_DOWN && encodeAndSend(event)) return true
         return super.onKeyDown(keyCode, event)
+    }
+
+    private fun encodeAndSend(event: KeyEvent): Boolean {
+        val meta = event.metaState
+        val printable = event.isPrintingKey
+        val unicode = if (printable) event.getUnicodeChar(meta) else 0
+        val utf8 = if (unicode != 0) {
+            String(Character.toChars(unicode)).toByteArray(Charsets.UTF_8)
+        } else {
+            null
+        }
+        val unshifted = if (printable) event.getUnicodeChar(0) else 0
+
+        val encoded = NativeTerminal.nativeEncodeKey(handle, event.keyCode, 1, meta, unshifted, utf8)
+        if (encoded != null) {
+            link?.send(encoded)
+            return true
+        }
+        // No terminal encoding applied (plain printable char, no modes in
+        // effect) — send the character itself when unmodified.
+        if (utf8 != null && meta and (KeyEvent.META_CTRL_ON or
+                KeyEvent.META_ALT_ON or KeyEvent.META_META_ON) == 0
+        ) {
+            link?.send(utf8)
+            return true
+        }
+        return false
     }
 }

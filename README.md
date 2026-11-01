@@ -50,7 +50,8 @@ renderer or PTY — those live in this repo on purpose.
 | `app/src/main/java/.../Pty.kt` | JNI declarations + typed wrapper for the PTY |
 | `app/src/main/java/.../GhosttyTerminalView.kt` | Canvas renderer, scroll, IME, hardware keys, long-press copy |
 | `app/src/main/java/.../TerminalSession.kt` | Owns terminal + PTY + reader thread; main-thread discipline |
-| `app/src/main/java/.../MainActivity.kt` | Minimal wiring demo |
+| `app/src/main/java/.../MainActivity.kt` | Minimal local-PTY wiring demo |
+| `app/src/main/java/.../hc/*` | herdr-core client: `HcConnection` (sshj + framed JSON-RPC), `HcTerminalSession` (attach channel as a `TerminalLink`), `HomeActivity` (hosts), `TerminalsActivity` (live list), `HcTerminalActivity` (attach UI), `Framed`/`JsonAssembler`, `HostStore` |
 | `vendor/{arm64-v8a,x86_64}/libghostty-vt.a` + `vendor/include/` | Prebuilt libghostty-vt (generated; see below) |
 | `third_party/ghostty` | Shallow clone at the pinned commit |
 | `toolchain/zig` | Zig 0.15.2 (ghostty pins the minor) |
@@ -94,14 +95,42 @@ To rebuild the vendored libs from source:
 ./scripts/vendor.sh
 ```
 
+## herdr-core client
+
+The app doubles as a [herdr-core](https://github.com/herdrdev/herdr-core)
+client. Flow: **Home** (saved SSH hosts) → **Terminals** (live list with
+OSC 7501 status dots) → **Terminal** (attach channel in the same renderer
+used for the local PTY demo).
+
+Protocol notes (`hc schema` is the authority):
+
+- Transport: `ssh host hc connect` over sshj; SSH is the only auth layer.
+- Line-mode `hello` (JSON-RPC, generation 1, `framed:true`), then all
+  traffic is `[channel u32 LE][kind u8][len u32 LE][payload]` — channel 0
+  JSON-RPC, attach/events channels carry bytes.
+- Gotcha: in framed mode core writes channel-0 replies **without trailing
+  newlines** (`server.rs`), so `JsonAssembler` reassembles by brace depth;
+  events channels are newline lines.
+- Flow control: credit every 64 KB consumed; core starts each stream with
+  256 KB. DATA that arrives before `watchChannel` is buffered and replayed
+  (first-paint race).
+- Hardware keys are encoded by the view (libghostty key encoder, DECCKM /
+  Kitty-protocol aware) and sent as DATA on the attach channel.
+- Key files: sshj cannot parse `openssh-key-v1` containers (modern ed25519
+  keys). Use RSA PEM keys or convert with `ssh-keygen -p -m PKCS8`.
+
+Tested end-to-end against a live core (emulator → host sshd → `hc
+connect`): list, `terminal.run`, attach, typing, output rendering.
+
 ## Verification
 
 - `scripts/host-smoke.sh` — builds the vendored lib for the host and runs it
   through the exact API path the shim uses (VT writes, cursor movement, EL,
   scrollback, resize reflow, plain-text formatting, key encoding).
-- On emulator (arm64/x86_64 image, API 35): installed and driven with
-  `adb shell input` — PTY prompt renders, typed commands execute, output and
-  fresh prompt render correctly, IME input and insets behave.
+- Local PTY demo (MainActivity): prompt render, typed commands, insets.
+- herdr client (HomeActivity → TerminalsActivity → HcTerminalActivity):
+  driven on the emulator against a live core — connect (TOFU host key),
+  list with statuses, new terminal, typing, remote output render.
 
 ## Notes / gotchas learned building this
 

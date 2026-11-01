@@ -38,5 +38,11 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("com.google.android.material:material:1.12.0")
+    // SSH transport to herdr-core (`ssh host hc connect`)
+    implementation("com.hierynomus:sshj:0.38.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("net.i2p.crypto:eddsa:0.3.0")
 }
