@@ -180,7 +180,7 @@ class HomeActivity : AppCompatActivity() {
             HcConnection().also {
                 HcApp.connection = it
                 it.listener = object : HcConnection.Listener {
-                    override fun onConnectionClosed(reason: String?) {
+                    override fun onDisconnected(reason: String?) {
                         runOnUiThread { toast("Disconnected: ${reason ?: "stream ended"}") }
                     }
                 }
@@ -192,7 +192,7 @@ class HomeActivity : AppCompatActivity() {
             .setCancelable(false)
             .show()
 
-        conn.connect(
+        conn.start(
             host,
             onReady = { hello ->
                 dialog.dismiss()

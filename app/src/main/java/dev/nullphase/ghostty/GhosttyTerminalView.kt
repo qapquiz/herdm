@@ -134,6 +134,30 @@ class GhosttyTerminalView @JvmOverloads constructor(
     internal fun cellWidthPx() = cellW
     internal fun cellHeightPx() = cellH
 
+    /** Clear the painted bitmap (fresh attach / reconnect repaint). */
+    internal fun resetScreen() {
+        bitmap?.eraseColor(defBg)
+        cursorX = -1
+        cursorY = -1
+        invalidate()
+    }
+
+    /** Encode an abstract key (accessory bar) and send it through the link. */
+    internal fun sendEncodedKey(keyCode: Int, meta: Int): Boolean {
+        if (handle == 0L) return false
+        val encoded = NativeTerminal.nativeEncodeKey(handle, keyCode, 1, meta, 0, null)
+        if (encoded != null) {
+            link?.send(encoded)
+            return true
+        }
+        return false
+    }
+
+    /** Literal text (accessory bar symbols) straight to the program. */
+    internal fun sendRawText(text: String) {
+        if (handle != 0L) link?.sendUtf8(text)
+    }
+
     var fontSize: Float
         get() = fontSizeSp
         set(value) {

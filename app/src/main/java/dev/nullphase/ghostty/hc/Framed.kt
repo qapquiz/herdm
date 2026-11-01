@@ -118,6 +118,11 @@ class LineAssembler {
 class JsonAssembler {
     private val buf = java.io.ByteArrayOutputStream()
 
+    /** Drop any buffered partial message (fresh transport). */
+    fun reset() {
+        buf.reset()
+    }
+
     fun push(bytes: ByteArray): List<JSONObject> {
         buf.write(bytes)
         val text = buf.toString("UTF-8")

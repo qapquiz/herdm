@@ -154,6 +154,18 @@ connect`): list, `terminal.run`, attach, typing, output rendering.
   screen looked empty.
 - **Cursor blink** is caller-driven: the snapshot reports `blinking`, the
   view re-invalidates every ~530 ms while it holds.
+- **Resilience**: a supervisor thread reconnects with backoff; on
+  `onReconnected` the list re-subscribes and open terminals re-attach with
+  a full repaint. Writer-thread failures are contained (never fatal).
+- **Flood guards** (reader-thread accounting, no main-thread posts):
+  events channel trips at 1 MB/s for 3 s, attach channel at 10 MB/s for
+  1 s → channel closes, session retries once, then exits to the list.
+  Rationale: an intermittent core-side zero-byte stream (~2.5 MB/s on the
+  attach/events channel after a mid-stream transport loss) was observed
+  with hc 0.1.15; unbuffered it OOMs any client. Suspected upstream relay
+  issue — worth filing with the repro (attach → kill `hc connect` →
+  auto-reconnect → reattach). `pendingData` replay is capped at 512
+  chunks with an overflow flag for the same reason.
 
 ## Not yet implemented (obvious next steps)
 

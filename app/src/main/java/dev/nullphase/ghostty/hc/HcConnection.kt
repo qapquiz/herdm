@@ -18,8 +18,10 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.security.Security
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 
 /**
  * One SSH-tunneled herdr-core connection speaking the framed JSON-RPC
@@ -27,7 +29,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * [channel u32][kind u8][len u32][payload] frames — channel 0 is JSON-RPC,
  * attach/events channels carry terminal bytes.
  *
- * All callbacks are invoked on the main thread. Reader thread does I/O only.
+ * A supervisor thread keeps the connection alive: after a drop it reconnects
+ * with backoff, fires [Listener.onReconnected] (sessions re-attach), and
+ * keeps trying until [stop]. All callbacks run on the main thread; I/O
+ * happens on the reader/writer threads.
  */
 class HcConnection {
     companion object {
@@ -55,13 +60,22 @@ class HcConnection {
     }
 
     interface Listener {
-        /** Events-channel line (JSON) or channel-0 notification, main thread. */
+        /** Events-channel notification payload, main thread. */
         fun onEvent(obj: JSONObject) {}
-        /** The SSH/exec stream ended, main thread. */
-        fun onConnectionClosed(reason: String?) {}
+        /** Lost the stream and a reconnect attempt is starting, main thread. */
+        fun onReconnecting(attempt: Int) {}
+        /** Stream re-established and hello succeeded again, main thread. */
+        fun onReconnected() {}
+        /** Stopped for good (stop() or unrecoverable), main thread. */
+        fun onDisconnected(reason: String?) {}
     }
 
     @Volatile var listener: Listener? = null
+
+    @Volatile
+    var alive = false
+        private set
+
     /** Fingerprint accepted during the latest connect (TOFU store side). */
     @Volatile var negotiatedHostKey: String? = null
         private set
@@ -69,47 +83,153 @@ class HcConnection {
         private set
 
     private val main = Handler(Looper.getMainLooper())
-    private val running = AtomicBoolean(false)
+    private val running = AtomicBoolean(false) // current transport alive
+    private val wantConnection = AtomicBoolean(false)
     private val nextId = AtomicInteger(1)
     private val pending = ConcurrentHashMap<Int, (JSONObject?, JSONObject?) -> Unit>()
     private val consumed = ConcurrentHashMap<Int, Long>()
     private val dataListeners = ConcurrentHashMap<Int, (ByteArray) -> Unit>()
     private val closeListeners = ConcurrentHashMap<Int, (String?) -> Unit>()
-    /** DATA that arrived before a listener registered (first paint race). */
+    /** DATA that arrived before a listener registered (first paint race).
+     *  Capped: a misbehaving/core-side flood must not OOM the app. */
     private val pendingData = ConcurrentHashMap<Int, MutableList<ByteArray>>()
+    private val pendingDataOverflow = ConcurrentHashMap<Int, Boolean>()
     private val pendingClose = ConcurrentHashMap<Int, String?>()
     private val lineAssemblers = ConcurrentHashMap<Int, LineAssembler>()
     private val ch0 = JsonAssembler()
+    private val reconnectListeners = ConcurrentHashMap<Int, () -> Unit>()
+    private val reconnectIds = AtomicInteger(1)
+
+    // Rate guard for one channel (reader-thread-only state; trips when the
+    // channel sustains more than guardBytesPerSec — a runaway stream must
+    // never OOM the app through the main-thread post queue).
+    private var guardChannel = -1
+    private var guardLimit = Long.MAX_VALUE
+    private var guardWindowStart = 0L
+    private var guardWindowBytes = 0L
+    private var guardTripsNeeded = 1
+
+    private var host: HostConfig? = null
     private var ssh: SSHClient? = null
     private var exec: Session.Command? = null
     private var out: OutputStream? = null
     private val writeLock = Any()
-    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-        Thread(r, "hc-writer").apply { isDaemon = true }
-    }
+    private var writer: java.util.concurrent.ExecutorService? = null
+    private var supervisor: Thread? = null
 
-    fun connect(host: HostConfig, onReady: (JSONObject) -> Unit, onError: (String) -> Unit) {
+    // ---------------------------------------------------------- lifecycle
+
+    /**
+     * Connect and keep the connection alive. [onReady] fires once on the
+     * first successful hello; every later re-established hello fires
+     * [Listener.onReconnected]. [onError] fires only when the *initial*
+     * connect fails (auth, unreachable, host-key mismatch).
+     */
+    fun start(host: HostConfig, onReady: (JSONObject) -> Unit, onError: (String) -> Unit) {
+        this.host = host
         negotiatedHostKey = null
         hostKeyMismatch = false
-        Thread {
-            try {
-                doConnect(host, onReady)
-            } catch (e: Exception) {
-                Log.w(TAG, "connect failed", e)
-                val msg = if (hostKeyMismatch) {
-                    "HOST KEY CHANGED for ${host.hostname}: expected ${host.hostKeyFingerprint}, got $negotiatedHostKey. " +
-                        "Edit the host to accept the new key."
-                } else {
-                    e.message ?: e.toString()
+        wantConnection.set(true)
+        supervisor?.interrupt()
+        supervisor = thread(name = "hc-supervisor") {
+            var attempt = 0
+            var everReady = false
+            while (wantConnection.get()) {
+                if (attempt > 0) {
+                    val delay = (1000L shl (attempt - 1).coerceAtMost(4)).coerceAtMost(15_000)
+                    main.post { listener?.onReconnecting(attempt) }
+                    try {
+                        Thread.sleep(delay)
+                    } catch (_: InterruptedException) {
+                        return@thread
+                    }
+                    if (!wantConnection.get()) return@thread
                 }
-                main.post { onError(msg) }
-                disconnect()
+                try {
+                    doConnect(host) { hello ->
+                        alive = true
+                        attempt = 0
+                        if (!everReady) {
+                            everReady = true
+                            main.post { onReady(hello) }
+                        } else {
+                            main.post {
+                                reconnectListeners.values.forEach { it() }
+                                listener?.onReconnected()
+                            }
+                        }
+                    }
+                    // doConnect returns when the stream ends.
+                    if (wantConnection.get()) attempt++
+                } catch (e: Exception) {
+                    alive = false
+                    if (!everReady) {
+                        Log.w(TAG, "connect failed", e)
+                        val msg = if (hostKeyMismatch) {
+                            "HOST KEY CHANGED for ${host.hostname}: expected ${host.hostKeyFingerprint}, " +
+                                "got $negotiatedHostKey. Edit the host to accept the new key."
+                        } else {
+                            e.message ?: e.toString()
+                        }
+                        wantConnection.set(false)
+                        main.post { onError(msg) }
+                        return@thread
+                    }
+                    if (wantConnection.get()) attempt++
+                } finally {
+                    teardownTransport()
+                }
             }
-        }.start()
+            main.post { listener?.onDisconnected(null) }
+        }
     }
 
+    /** Stop supervising and drop the transport. */
+    fun stop() {
+        wantConnection.set(false)
+        supervisor?.interrupt()
+        supervisor = null
+        teardownTransport()
+    }
+
+    private fun teardownTransport() {
+        alive = false
+        runCatching { exec?.close() }
+        runCatching { ssh?.disconnect() }
+        out = null
+        exec = null
+        ssh = null
+        writer?.shutdown()
+        writer = null
+        main.post {
+            failAllPending("disconnected")
+            dataListeners.clear()
+            closeListeners.clear()
+            pendingData.clear()
+            pendingDataOverflow.clear()
+            pendingClose.clear()
+            lineAssemblers.clear()
+        }
+    }
+
+    private fun failAllPending(kind: String) {
+        for ((_, cb) in pending) main.post { cb(null, JSONObject().put("kind", kind)) }
+        pending.clear()
+    }
+
+    fun registerReconnect(cb: () -> Unit): Int {
+        val id = reconnectIds.getAndIncrement()
+        reconnectListeners[id] = cb
+        return id
+    }
+
+    fun unregisterReconnect(id: Int) {
+        reconnectListeners.remove(id)
+    }
+
+    // ------------------------------------------------------------- connect
+
     private fun doConnect(host: HostConfig, onReady: (JSONObject) -> Unit) {
-        SecurityUtils.setRegisterBouncyCastle(false) // we insert BC ourselves
         val client = SSHClient()
         client.connectTimeout = 15_000
         client.timeout = 0 // streams are long-lived
@@ -147,6 +267,9 @@ class HcConnection {
         val cmd = session.exec(host.command)
         ssh = client
         exec = cmd
+        writer = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "hc-writer").apply { isDaemon = true }
+        }
 
         // Line mode: hello handshake (JSON-RPC, one message per line).
         val hello = JSONObject()
@@ -162,12 +285,19 @@ class HcConnection {
             )
         val input = cmd.inputStream
         out = cmd.outputStream
+        // Line mode until hello completes: raw line, NOT a frame.
+        val o = out
         synchronized(writeLock) {
-            out!!.write((hello.toString() + "\n").toByteArray(Charsets.UTF_8))
-            out!!.flush()
+            o!!.write((hello.toString() + "\n").toByteArray(Charsets.UTF_8))
+            o.flush()
         }
 
         running.set(true)
+        // Fresh per-transport state.
+        pendingData.clear()
+        pendingClose.clear()
+        consumed.clear()
+        ch0.reset()
         readLoop(input, onReady)
     }
 
@@ -200,12 +330,43 @@ class HcConnection {
                         if (frame.channel == 0) {
                             for (obj in ch0.push(frame.payload)) handleControlLine(obj)
                         } else {
+                            if (frame.channel == guardChannel) {
+                                val now = System.currentTimeMillis()
+                                if (now - guardWindowStart >= 1000) {
+                                    if (guardWindowBytes > guardLimit) {
+                                        guardWindowBytes = 0
+                                        guardTripsNeeded--
+                                        Log.w(TAG, "rate guard window exceeded on ch=${frame.channel}")
+                                        if (guardTripsNeeded <= 0) {
+                                            val reason = "rate guard tripped"
+                                            dataListeners.remove(frame.channel)
+                                            closeListeners.remove(frame.channel)
+                                            guardChannel = -1
+                                            writeFrame(frame.channel, Framed.CLOSE, reason.toByteArray(Charsets.UTF_8))
+                                            main.post {
+                                                closeListeners[frame.channel]?.invoke(reason)
+                                                closeListeners.remove(frame.channel)
+                                            }
+                                            continue
+                                        }
+                                    } else {
+                                        guardWindowBytes = 0
+                                    }
+                                    guardWindowStart = now
+                                }
+                                guardWindowBytes += frame.payload.size
+                            }
                             credit(frame.channel, frame.payload.size)
                             val cb = dataListeners[frame.channel]
                             if (cb != null) main.post { cb(frame.payload) }
-                            else pendingData
-                                .getOrPut(frame.channel) { mutableListOf() }
-                                .add(frame.payload)
+                            else {
+                                val bufList = pendingData.getOrPut(frame.channel) { mutableListOf() }
+                                if (bufList.size < 512) {
+                                    bufList.add(frame.payload)
+                                } else if (pendingDataOverflow.putIfAbsent(frame.channel, true) == null) {
+                                    Log.w(TAG, "channel ${frame.channel} overflow while unwatched; dropping bytes")
+                                }
+                            }
                         }
                     }
                     Framed.CLOSE -> {
@@ -223,13 +384,8 @@ class HcConnection {
         } catch (e: Exception) {
             if (running.get()) Log.w(TAG, "reader ended", e)
         } finally {
-            val wasRunning = running.getAndSet(false)
-            if (wasRunning) main.post { listener?.onConnectionClosed(null) }
-            pending.clear()
-            main.post {
-                dataListeners.clear()
-                closeListeners.clear()
-            }
+            running.set(false)
+            failAllPending("disconnected")
         }
     }
 
@@ -251,22 +407,23 @@ class HcConnection {
     private fun writeFrame(channel: Int, kind: Byte, payload: ByteArray) {
         if (out == null) return
         runCatching {
-            writer.execute {
+            writer?.execute {
                 val o = out ?: return@execute
-                synchronized(writeLock) {
-                    o.write(Framed.encode(channel, kind, payload))
-                    o.flush()
+                // Transport may die between queueing and running; a failed
+                // write never kills the writer thread (supervisor reconnects).
+                runCatching {
+                    synchronized(writeLock) {
+                        o.write(Framed.encode(channel, kind, payload))
+                        o.flush()
+                    }
                 }
             }
         }
     }
 
-    /** True while the SSH stream and reader are alive. */
-    val alive: Boolean get() = running.get()
-
     /** JSON-RPC request over channel 0; callback receives (result, error). */
     fun request(method: String, params: JSONObject = JSONObject(), cb: ((JSONObject?, JSONObject?) -> Unit)? = null) {
-        if (!running.get()) {
+        if (!alive) {
             cb?.invoke(null, JSONObject().put("kind", "disconnected"))
             return
         }
@@ -319,16 +476,37 @@ class HcConnection {
         }
     }
 
-    fun watchChannel(channel: Int, onData: (ByteArray) -> Unit, onClose: (String?) -> Unit) {
+    /**
+     * Watch a channel. Optionally guard it against a runaway stream: if the
+     * channel sustains more than [guardBytesPerSec] for [tripWindows]
+     * consecutive 1 s windows, the channel is closed reader-side and
+     * [onClose] receives "rate guard tripped". The attach channel of a
+     * healthy terminal never approaches this.
+     */
+    fun watchChannel(
+        channel: Int,
+        onData: (ByteArray) -> Unit,
+        onClose: (String?) -> Unit,
+        guardBytesPerSec: Long = 0,
+        tripWindows: Int = 3,
+    ) {
         dataListeners[channel] = onData
         closeListeners[channel] = onClose
+        if (guardBytesPerSec > 0) {
+            guardChannel = channel
+            guardLimit = guardBytesPerSec
+            guardTripsNeeded = tripWindows
+            guardWindowStart = System.currentTimeMillis()
+            guardWindowBytes = 0
+        }
+        if (pendingDataOverflow.remove(channel) == true) {
+            pendingData.remove(channel)
+            main.post { onClose("overflow while unwatched") }
+            return
+        }
         val buffered = pendingData.remove(channel)
         if (buffered != null) {
             for (chunk in buffered) main.post { onData(chunk) }
-        }
-        val earlyClose = pendingClose.remove(channel)
-        if (earlyClose != null || (buffered != null && closeListeners[channel] == null)) {
-            if (earlyClose != null) main.post { onClose(earlyClose) }
         }
     }
 
@@ -350,6 +528,7 @@ class HcConnection {
         dataListeners.remove(channel)
         closeListeners.remove(channel)
         pendingData.remove(channel)
+        pendingDataOverflow.remove(channel)
         pendingClose.remove(channel)
         writeFrame(channel, Framed.CLOSE, ByteArray(0))
     }
@@ -362,17 +541,5 @@ class HcConnection {
         } else {
             consumed[channel] = total
         }
-    }
-
-    fun disconnect() {
-        running.set(false)
-        writer.execute {
-            runCatching { exec?.close() }
-            runCatching { ssh?.disconnect() }
-            out = null
-            exec = null
-            ssh = null
-        }
-        writer.shutdown()
     }
 }

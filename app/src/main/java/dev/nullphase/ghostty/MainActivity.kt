@@ -3,6 +3,8 @@ package dev.nullphase.ghostty
 import android.app.Activity
 import android.os.Bundle
 import android.widget.Toast
+import dev.nullphase.ghostty.hc.AccessoryBar
+import dev.nullphase.ghostty.hc.applyInsets
 
 class MainActivity : Activity() {
     private var session: TerminalSession? = null
@@ -10,22 +12,36 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val view = GhosttyTerminalView(this)
-        val root = android.widget.FrameLayout(this)
-        root.addView(
+        val holder = android.widget.FrameLayout(this)
+        holder.addView(
             view,
             android.widget.FrameLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = androidx.core.view.WindowInsetsCompat
-                .Type.systemBars()
-                .let(insets::getInsets)
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
         }
+        root.addView(
+            holder,
+            android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
+            ),
+        )
+        root.addView(
+            AccessoryBar(
+                this,
+                onKey = { keyCode, meta -> view.sendEncodedKey(keyCode, meta) },
+                onText = { text -> view.sendRawText(text) },
+            ),
+            android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
         setContentView(root)
+        applyInsets(root)
         session = TerminalSession(view.context, view, onFinish = { status ->
             val code = Pty.exitCodeOf(status)
             Toast.makeText(this, "shell exited ($code)", Toast.LENGTH_LONG).show()

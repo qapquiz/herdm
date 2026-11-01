@@ -2,6 +2,7 @@ package dev.nullphase.ghostty.hc
 
 import android.os.Bundle
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import dev.nullphase.ghostty.GhosttyTerminalView
@@ -24,12 +25,30 @@ class HcTerminalActivity : AppCompatActivity() {
         this.title = title
 
         view = GhosttyTerminalView(this)
-        val root = FrameLayout(this)
-        root.addView(
+        val holder = FrameLayout(this)
+        holder.addView(
             view,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(
+            holder,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f,
+            ),
+        )
+        root.addView(
+            AccessoryBar(
+                this,
+                onKey = { keyCode, meta -> view.sendEncodedKey(keyCode, meta) },
+                onText = { text -> view.sendRawText(text) },
+            ),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
         setContentView(root)

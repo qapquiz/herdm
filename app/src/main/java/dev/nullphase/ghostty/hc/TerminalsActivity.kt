@@ -17,7 +17,10 @@ import com.google.android.material.button.MaterialButton
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Main app after connect: live terminal list with OSC 7501 status dots. */
+/**
+ * Main app after connect: live terminal list with OSC 7501 status dots,
+ * grouped by machine, updated in place from events.subscribe facts.
+ */
 class TerminalsActivity : AppCompatActivity() {
     private lateinit var conn: HcConnection
     private lateinit var hostName: String
@@ -25,8 +28,13 @@ class TerminalsActivity : AppCompatActivity() {
     private lateinit var header: TextView
     private val main = Handler(Looper.getMainLooper())
     private var terminals: JSONArray = JSONArray()
+    private var machines: JSONArray = JSONArray()
+    private var rows: List<Row> = emptyList()
     private var refreshScheduled = false
     private var eventsChannel = -1
+    private var reconnectId = -1
+
+    private data class Row(val header: String?, val terminal: JSONObject?)
 
     private val statusColor = mapOf(
         "idle" to 0xFF4CAF50.toInt(),
@@ -38,11 +46,9 @@ class TerminalsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val conn = HcApp.connection
-        if (conn == null) {
+        conn = HcApp.connection ?: run {
             finish(); return
         }
-        this.conn = conn
         hostName = intent.getStringExtra("hostName") ?: "core"
 
         val root = LinearLayout(this).apply {
@@ -69,8 +75,11 @@ class TerminalsActivity : AppCompatActivity() {
             ).also { it.setMargins(0, dp(8), 0, dp(8)) }
         }
         list.adapter = TermAdapter()
-        list.setOnItemClickListener { _, _, pos, _ -> openTerminal(at(pos)) }
-        list.setOnItemLongClickListener { _, _, pos, _ -> killTerminal(at(pos)); true }
+        list.setOnItemClickListener { _, _, pos, _ -> rows.getOrNull(pos)?.let { it.terminal?.let(::openTerminal) } }
+        list.setOnItemLongClickListener { _, _, pos, _ ->
+            rows.getOrNull(pos)?.terminal?.let(::killTerminal)
+            true
+        }
         root.addView(list)
         root.addView(
             MaterialButton(this).apply {
@@ -82,21 +91,36 @@ class TerminalsActivity : AppCompatActivity() {
         applyInsets(root)
 
         conn.listener = object : HcConnection.Listener {
-            override fun onConnectionClosed(reason: String?) {
+            override fun onReconnecting(attempt: Int) {
+                header.text = "$hostName · reconnecting (attempt $attempt)…"
+            }
+
+            override fun onReconnected() {
+                toast("reconnected")
+                subscribeEvents()
+                refresh()
+            }
+
+            override fun onDisconnected(reason: String?) {
+                if (isFinishing) return
                 AlertDialog.Builder(this@TerminalsActivity)
                     .setTitle("Disconnected")
-                    .setMessage(reason ?: "The SSH stream ended.")
+                    .setMessage(reason ?: "Stopped.")
                     .setPositiveButton("Home") { _, _ -> finish() }
                     .setCancelable(false)
                     .show()
             }
         }
 
+        reconnectId = conn.registerReconnect {
+            // Re-established events channel arrives via subscribeEvents below.
+        }
+
         subscribeEvents()
         refresh()
     }
 
-    private fun at(pos: Int): JSONObject = terminals.getJSONObject(pos)
+    private fun at(pos: Int): JSONObject = rows[pos].terminal ?: JSONObject()
 
     private fun subscribeEvents() {
         conn.request("events.subscribe") { result, _ ->
@@ -107,16 +131,127 @@ class TerminalsActivity : AppCompatActivity() {
                 conn.watchChannel(
                     ch,
                     onData = { bytes ->
-                        val got = lines.push(bytes).isNotEmpty()
-                        if (got) scheduleRefresh()
+                        for (line in lines.push(bytes)) {
+                            runCatching { JSONObject(line) }.getOrNull()?.let { notification ->
+                                val params = notification.optJSONObject("params") ?: notification
+                                applyEvent(params)
+                            }
+                        }
                     },
                     onClose = { },
+                    guardBytesPerSec = 1L * 1024 * 1024,
+                    tripWindows = 3,
                 )
             }
         }
     }
 
-    /** Debounced: any event storm collapses into one terminal.list call. */
+    /** Apply one event fact to the in-memory model; no network round-trip. */
+    private fun applyEvent(params: JSONObject) {
+        val type = params.optString("type").takeUnless { it.isEmpty() || it == "null" } ?: return
+        val address = params.optString("terminal").takeUnless { it.isEmpty() || it == "null" }
+        val data = params.optJSONObject("data") ?: JSONObject()
+
+        when (type) {
+            "created" -> upsert(data) // carries the full terminal object
+            "removed" -> removeTerminal(address)
+            "finished" -> patch(address) {
+                it.putOpt("exit_code", data.opt("exit_code"))
+                it.putOpt("finished_ms", data.opt("finished_ms"))
+            }
+            "status" -> patch(address) {
+                if (data.has("status")) it.putOpt("status", data.opt("status"))
+                else if (data.has("state")) it.putOpt("status", data)
+            }
+            "labels" -> patch(address) { it.putOpt("labels", data.opt("labels")) }
+            "title" -> patch(address) { it.putOpt("title", data) }
+            "foreground" -> patch(address) { it.putOpt("foreground", data) }
+            "size" -> patch(address) {
+                it.putOpt("cols", data.opt("cols"))
+                it.putOpt("rows", data.opt("rows"))
+            }
+            "turn" -> patch(address) { it.putOpt("turn", data.opt("turn")) }
+            else -> scheduleRefresh() // unknown/missed facts: full refresh fallback
+        }
+        renderRows()
+    }
+
+    private fun upsert(t: JSONObject) {
+        val address = t.optString("address")
+        for (i in 0 until terminals.length()) {
+            if (terminals.optJSONObject(i)?.optString("address") == address) {
+                terminals.put(i, t)
+                return
+            }
+        }
+        terminals.put(t)
+    }
+
+    private fun removeTerminal(address: String?) {
+        if (address == null) return
+        for (i in terminals.length() - 1 downTo 0) {
+            if (terminals.optJSONObject(i)?.optString("address") == address) {
+                terminals.remove(i)
+            }
+        }
+    }
+
+    private fun patch(address: String?, patch: (JSONObject) -> Unit) {
+        if (address == null) return
+        for (i in 0 until terminals.length()) {
+            val t = terminals.optJSONObject(i) ?: continue
+            if (t.optString("address") == address) {
+                patch(t)
+                return
+            }
+        }
+    }
+
+    private fun renderRows() {
+        rows = buildRows()
+        header.text = "$hostName · ${liveCount()} terminals"
+        (list.adapter as TermAdapter).notifyDataSetChanged()
+    }
+
+    private fun liveCount(): Int {
+        var n = 0
+        for (i in 0 until terminals.length()) {
+            if (terminals.optJSONObject(i)?.isNull("finished_ms") == true) n++
+        }
+        return n
+    }
+
+    /** Local terminals first, then one section per machine in list order. */
+    private fun buildRows(): List<Row> {
+        val rows = mutableListOf<Row>()
+        val local = mutableListOf<JSONObject>()
+        val byMachine = linkedMapOf<String, MutableList<JSONObject>>()
+        val machineNames = mutableListOf<String>()
+        for (i in 0 until machines.length()) {
+            val m = machines.optJSONObject(i) ?: continue
+            val name = m.optString("name").takeUnless { it.isEmpty() || it == "null" } ?: continue
+            machineNames.add(name)
+            byMachine[name] = mutableListOf()
+        }
+        for (i in 0 until terminals.length()) {
+            val t = terminals.optJSONObject(i) ?: continue
+            val address = t.optString("address")
+            val owner = machineNames.firstOrNull { address.startsWith("$it/") }
+            if (owner != null) byMachine.getValue(owner).add(t) else local.add(t)
+        }
+        rows.add(Row(hostName, null))
+        local.forEach { rows.add(Row(null, it)) }
+        for (name in machineNames) {
+            val mv = (0 until machines.length())
+                .mapNotNull { machines.optJSONObject(it) }
+                .firstOrNull { it.optString("name") == name }
+            val offline = mv != null && !mv.isNull("since_ms")
+            rows.add(Row("$name${if (offline) " (offline)" else ""}", null))
+            byMachine[name]?.forEach { rows.add(Row(null, it)) }
+        }
+        return rows
+    }
+
     private fun scheduleRefresh() {
         if (refreshScheduled) return
         refreshScheduled = true
@@ -127,8 +262,8 @@ class TerminalsActivity : AppCompatActivity() {
         conn.request("terminal.list") { result, error ->
             if (error != null) return@request
             terminals = result?.optJSONArray("terminals") ?: JSONArray()
-            header.text = "$hostName · ${terminals.length()} terminals"
-            (list.adapter as TermAdapter).notifyDataSetChanged()
+            machines = result?.optJSONArray("machines") ?: JSONArray()
+            renderRows()
         }
     }
 
@@ -139,7 +274,7 @@ class TerminalsActivity : AppCompatActivity() {
             .put("TERM_PROGRAM", "ghostty-droid")
         conn.request("terminal.run", JSONObject().put("env", env)) { _, error ->
             if (error != null) toast("run failed: ${error.opt("kind")}")
-            // refresh arrives via events
+            // created event applies the row
         }
     }
 
@@ -148,7 +283,7 @@ class TerminalsActivity : AppCompatActivity() {
         if (address.isEmpty()) return
         val finished = !t.isNull("finished_ms")
         if (finished) {
-            toast("finished (exit ${t.optInt("exit_code", -1)}) — new one instead")
+            toast("finished (exit ${t.optInt("exit_code", -1)})")
             return
         }
         startActivity(
@@ -162,7 +297,6 @@ class TerminalsActivity : AppCompatActivity() {
         val address = t.optString("address")
         conn.request("terminal.kill", JSONObject().put("terminal", address)) { _, error ->
             if (error != null) toast("kill failed: ${error.opt("kind")}")
-            else scheduleRefresh()
         }
     }
 
@@ -185,51 +319,64 @@ class TerminalsActivity : AppCompatActivity() {
         val color = statusColor[state] ?: 0xFF616161.toInt()
         val msg = status.optString("msg")
         val progress = if (!status.isNull("progress")) " ${status.optInt("progress")}%" else ""
-        val label = state + progress + if (msg.isNotEmpty()) " · $msg" else ""
+        val label = state + progress + if (msg.isNotEmpty() && msg != "null") " · $msg" else ""
         return Triple(state, color, label)
     }
 
     private inner class TermAdapter : BaseAdapter() {
-        override fun getCount() = terminals.length()
-        override fun getItem(p: Int) = terminals.optJSONObject(p)
+        override fun getCount() = rows.size
+        override fun getItem(p: Int) = rows[p]
         override fun getItemId(p: Int) = p.toLong()
         override fun getView(p: Int, convertView: View?, parent: ViewGroup): View {
-            val row = convertView as? LinearLayout ?: LinearLayout(this@TerminalsActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, dp(12), 0, dp(12))
-                gravity = Gravity.CENTER_VERTICAL
-                val dot = TextView(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(10), dp(10)).also {
-                        it.rightMargin = dp(12)
+            val row = rows[p]
+            if (row.header != null) {
+                val headerView = (convertView as? TextView)?.takeIf { it.tag == "header" }
+                    ?: TextView(this@TerminalsActivity).apply {
+                        tag = "header"
+                        textSize = 13f
+                        alpha = 0.55f
+                        setPadding(0, dp(14), 0, dp(4))
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
                     }
-                }
-                val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-                val t = TextView(context).apply { textSize = 16f }
-                val s = TextView(context).apply { textSize = 13f; alpha = 0.6f }
-                col.addView(t); col.addView(s)
-                addView(dot)
-                addView(col)
-                tag = arrayOf(dot, t, s)
+                headerView.text = row.header.uppercase()
+                return headerView
             }
-            val views = row.tag as Array<TextView>
-            val t = at(p)
-            views[1].text = t.optString("name")
-                .takeUnless { it.isEmpty() || it == "null" }
-                ?: t.optString("address")
+            val t = row.terminal ?: JSONObject()
+            val item = (convertView as? LinearLayout)?.takeIf { it.tag != "header" }
+                ?: LinearLayout(this@TerminalsActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, dp(12), 0, dp(12))
+                    gravity = Gravity.CENTER_VERTICAL
+                    val dot = TextView(this.context).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(10), dp(10)).also {
+                            it.rightMargin = dp(12)
+                        }
+                    }
+                    val col = LinearLayout(this.context).apply { orientation = LinearLayout.VERTICAL }
+                    val title = TextView(this.context).apply { textSize = 16f }
+                    val sub = TextView(this.context).apply { textSize = 13f; alpha = 0.6f }
+                    col.addView(title); col.addView(sub)
+                    addView(dot)
+                    addView(col)
+                    tag = arrayOf(dot, title, sub)
+                }
+            val views = item.tag as Array<TextView>
+            views[1].text = displayTitle(t)
             val (state, color, label) = statusOf(t)
             views[0].background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
                 setColor(color)
             }
             views[2].text = label + "  ·  " + t.optString("cwd")
-            return row
+            return item
         }
     }
 
     override fun onDestroy() {
-        if (isFinishing) {
+        if (isFinishing && this::conn.isInitialized) {
             if (eventsChannel > 0) conn.closeChannel(eventsChannel)
-            conn.disconnect()
+            conn.unregisterReconnect(reconnectId)
+            conn.stop()
             HcApp.connection = null
         }
         super.onDestroy()
