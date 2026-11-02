@@ -1,5 +1,7 @@
 # herdm
 
+[![Build APK](https://github.com/qapquiz/herdm/actions/workflows/build.yml/badge.svg)](https://github.com/qapquiz/herdm/actions/workflows/build.yml)
+
 Native Android terminal emulator built directly on
 [libghostty-vt](https://github.com/ghostty-org/ghostty) — Ghostty's core
 terminal state machine — with a thin JNI shim, a Canvas dirty-row renderer,

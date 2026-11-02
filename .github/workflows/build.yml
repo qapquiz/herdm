@@ -1,0 +1,58 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      from_source:
+        description: 'Build libghostty-vt from source (Zig) instead of pinned prebuilt'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Default: the checksum-pinned prebuilt libghostty-vt release that
+      # matches the vendored commit (same recipe: Zig 0.15.2, -Dsimd=false,
+      # ReleaseFast). Optional input: build it from source instead.
+      - name: Fetch pinned libghostty-vt (prebuilt)
+        if: ${{ !inputs.from_source }}
+        run: |
+          mkdir -p vendor
+          curl -sL -o vendor.tar.gz "$PREBUILT_URL"
+          echo "$PREBUILT_SHA256  vendor.tar.gz" | sha256sum -c -
+          tar -xzf vendor.tar.gz -C vendor
+          ls vendor/*/libghostty-vt.a vendor/include/ghostty/vt.h
+        env:
+          PREBUILT_URL: https://github.com/arcboxlabs/expo-libghostty/releases/download/storage.libghostty-vt.b0947378349e.r3/libghostty-vt-android-b0947378349e-r3.tar.gz
+          PREBUILT_SHA256: b38f032f3f5e42cd3686ba6a10ecbb0669382de8df74ddd44be30e362c637d96
+
+      - name: Build libghostty-vt from source
+        if: ${{ inputs.from_source }}
+        run: |
+          mkdir -p third_party/ghostty
+          git -C third_party/ghostty init -q
+          git -C third_party/ghostty remote add origin https://github.com/ghostty-org/ghostty.git
+          git -C third_party/ghostty fetch -q --depth 1 origin b0947378349eff70f7030dda0e6d022fae1e6fbd
+          git -C third_party/ghostty checkout -q FETCH_HEAD
+          bash scripts/vendor.sh
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HerdrM-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk

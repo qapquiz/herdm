@@ -8,7 +8,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ZIG="$ROOT/toolchain/zig/zig"
+# Prefer the vendored toolchain; fall back to zig on PATH (CI).
+if [ -x "$ROOT/toolchain/zig/zig" ]; then
+  ZIG="$ROOT/toolchain/zig/zig"
+else
+  ZIG="$(command -v zig || true)"
+  [ -z "$ZIG" ] && { echo "zig not found (toolchain/zig or PATH)" >&2; exit 1; }
+fi
 GHOSTTY="$ROOT/third_party/ghostty"
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/27.1.12297006}"
 
