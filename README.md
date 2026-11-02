@@ -102,7 +102,37 @@ client. Flow: **Home** (saved SSH hosts) → **Terminals** (live list with
 OSC 7501 status dots) → **Terminal** (attach channel in the same renderer
 used for the local PTY demo).
 
-Protocol notes (`hc schema` is the authority):
+## Mosh transport
+
+Hosts with **transport = mosh** skip herdr entirely: Home → tap → full-screen
+remote shell over mosh's UDP protocol (roaming, survives IP changes and
+long dead zones — built for phones).
+
+How it works — no protocol reimplementation, a real client binary:
+
+- `app/src/main/jniLibs/<abi>/` ships Termux's `mosh-client` 1.4.0
+  (aarch64 + x86_64) and its 53-library closure (abseil, protobuf,
+  ncursesw, openssl, zlib, libc++_shared, libandroid-support). Files with
+  version-suffixed names (`.so.6/3/1`) are renamed bare-`.so` with their
+  ELF `DT_NEEDED`/`SONAME` strings patched in place (same byte length,
+  NUL-padded) because AGP drops `.so.<n>` names from APKs.
+- `packaging { jniLibs { useLegacyPackaging = true } }` is required:
+  without it `nativeLibraryDir` stays empty (libs load from the APK for
+  dlopen, but there is no file to `execve`).
+- Bootstrap (sshj, same TOFU host key): `mosh-server new` over SSH →
+  parse `MOSH CONNECT <port> <key>` → SSH drops; `MOSH_KEY=<key>
+  mosh-client <ip> <port>` runs against a local PTY.
+- Rendering/input are the same `GhosttyTerminalView` + libghostty key
+  encoder as everywhere else; mosh-client's ncurses output is just VT.
+- Runtime env: `TERMINFO` → bundled `xterm-256color` entry (copied from
+  assets to filesDir), `LD_LIBRARY_PATH`/`LD_PRELOAD` → nativeLibraryDir
+  (libandroid-support for the UTF-8 locale check), `LC_ALL=C.UTF-8`.
+
+Limitations: each connect starts a **new** mosh session (run tmux/herdr
+inside for persistence); requires `mosh` on the host; UDP must reach the
+host (roams across networks by design).
+
+### herdr protocol notes (`hc schema` is the authority)
 
 - Transport: `ssh host hc connect` over sshj; SSH is the only auth layer.
 - Line-mode `hello` (JSON-RPC, generation 1, `framed:true`), then all
@@ -122,7 +152,7 @@ Protocol notes (`hc schema` is the authority):
 Tested end-to-end against a live core (emulator → host sshd → `hc
 connect`): list, `terminal.run`, attach, typing, output rendering.
 
-## Verification
+## Verification checklist
 
 - `scripts/host-smoke.sh` — builds the vendored lib for the host and runs it
   through the exact API path the shim uses (VT writes, cursor movement, EL,
@@ -131,6 +161,9 @@ connect`): list, `terminal.run`, attach, typing, output rendering.
 - herdr client (HomeActivity → TerminalsActivity → HcTerminalActivity):
   driven on the emulator against a live core — connect (TOFU host key),
   list with statuses, new terminal, typing, remote output render.
+- mosh client (HomeActivity → MoshTerminalActivity): bootstrap + UDP
+  session verified end-to-end on the emulator — remote prompt render,
+  typing, remote command output (aarch64 + x86_64 binaries bundled).
 
 ## Notes / gotchas learned building this
 

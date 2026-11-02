@@ -85,6 +85,24 @@
                 android:text="Private key" />
         </RadioGroup>
 
+        <RadioGroup
+            android:id="@+id/f_transport"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/f_transport_ssh"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="herdr (SSH)" />
+            <RadioButton
+                android:id="@+id/f_transport_mosh"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mosh (UDP)" />
+        </RadioGroup>
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/f_password_layout"
             android:layout_width="match_parent"

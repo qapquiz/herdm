@@ -13,7 +13,9 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.launch
 import dev.nullphase.ghostty.R
 import java.io.File
 import java.util.UUID
@@ -119,6 +121,8 @@ class HomeActivity : AppCompatActivity() {
         val keyLayout = view.findViewById<View>(R.id.f_key_layout)
         val radioPassword = view.findViewById<android.widget.RadioButton>(R.id.f_auth_password)
         val radioKey = view.findViewById<android.widget.RadioButton>(R.id.f_auth_key)
+        val radioSsh = view.findViewById<android.widget.RadioButton>(R.id.f_transport_ssh)
+        val radioMosh = view.findViewById<android.widget.RadioButton>(R.id.f_transport_mosh)
 
         fun syncAuth() {
             val useKey = radioKey.isChecked
@@ -134,6 +138,7 @@ class HomeActivity : AppCompatActivity() {
             port.setText(existing.port.toString())
             user.setText(existing.username)
             if (existing.authType == "key") radioKey.isChecked = true
+            if (existing.transport == "mosh") radioMosh.isChecked = true
             password.setText(existing.password)
             keyPath.text = existing.keyPath
             keyPath.tag = existing.keyPath
@@ -152,12 +157,14 @@ class HomeActivity : AppCompatActivity() {
             .setPositiveButton("Save") { _, _ ->
                 val picked = keyPath.tag as? String
                 val authType = if (radioKey.isChecked) "key" else "password"
+                val transport = if (radioMosh.isChecked) "mosh" else "ssh"
                 val host = (existing ?: HostConfig(id = HostStore.newId(), name = "", hostname = "", port = 22, username = "", authType = authType, password = null, keyPath = null, keyPassphrase = null)).copy(
                     name = name.text.toString().ifBlank { hostname.text.toString() },
                     hostname = hostname.text.toString().trim(),
                     port = port.text.toString().toIntOrNull() ?: 22,
                     username = user.text.toString().trim(),
                     authType = authType,
+                    transport = transport,
                     password = if (authType == "password") password.text?.toString() else null,
                     keyPath = if (authType == "key") picked else existing?.keyPath,
                     keyPassphrase = if (authType == "key") passphrase.text?.toString() else null,
@@ -174,7 +181,47 @@ class HomeActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun connectMosh(host: HostConfig) {
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Starting mosh to ${host.name}")
+            .setView(TextView(this).apply {
+                setPadding(dp(24), dp(16), dp(24), dp(8))
+                text = "ssh → mosh-server new → UDP session"
+            })
+            .setCancelable(false)
+            .show()
+        lifecycleScope.launch {
+            try {
+                val m = MoshBootstrap.start(host)
+                val fp = MoshBootstrap.negotiatedHostKey
+                if (fp != null && host.hostKeyFingerprint == null) {
+                    host.hostKeyFingerprint = fp
+                    HostStore.update(this@HomeActivity, host)
+                }
+                dialog.dismiss()
+                startActivity(
+                    Intent(this@HomeActivity, MoshTerminalActivity::class.java)
+                        .putExtra("ip", m.ip)
+                        .putExtra("port", m.port)
+                        .putExtra("key", m.key)
+                        .putExtra("hostName", host.name),
+                )
+            } catch (e: Exception) {
+                dialog.dismiss()
+                AlertDialog.Builder(this@HomeActivity)
+                    .setTitle("Mosh failed")
+                    .setMessage(e.message ?: e.toString())
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
     private fun connect(host: HostConfig) {
+        if (host.transport == "mosh") {
+            connectMosh(host)
+            return
+        }
         val existing = HcApp.connection
         val conn = if (existing != null && existing.alive) existing else {
             HcConnection().also {

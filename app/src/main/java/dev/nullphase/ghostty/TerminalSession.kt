@@ -3,6 +3,7 @@ package dev.nullphase.ghostty
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import kotlin.concurrent.thread
 
 /**
@@ -15,10 +16,13 @@ import kotlin.concurrent.thread
 class TerminalSession(
     context: Context,
     val view: GhosttyTerminalView,
+    private val program: String = "/system/bin/sh",
+    private val programArgs: List<String> = listOf("-l"),
+    private val programEnv: Map<String, String>? = null,
+    private val programCwd: String? = null,
     private val onFinish: (Int) -> Unit = {},
 ) : TerminalLink {
     private companion object {
-        const val SHELL = "/system/bin/sh"
         const val MAX_SCROLLBACK = 10L * 1024 * 1024 // ~10 MB of scrollback bytes
     }
 
@@ -34,7 +38,7 @@ class TerminalSession(
         handle = NativeTerminal.nativeCreate(80, 24, MAX_SCROLLBACK)
         require(handle != 0L) { "failed to create native terminal" }
 
-        val env = mapOf(
+        val env = programEnv ?: mapOf(
             "TERM" to "xterm-256color",
             "COLORTERM" to "truecolor",
             "HOME" to context.filesDir.absolutePath,
@@ -42,9 +46,10 @@ class TerminalSession(
             "PATH" to "/system/bin:/system/xbin:/vendor/bin",
             "LANG" to "C.UTF-8",
         )
-        val cwd = context.getExternalFilesDir(null)?.absolutePath ?: context.filesDir.absolutePath
-        val p = Pty.open(80, 24, SHELL, listOf("-l"), cwd, env)
-        requireNotNull(p) { "failed to open pty for $SHELL" }
+        val cwd = programCwd
+            ?: context.getExternalFilesDir(null)?.absolutePath ?: context.filesDir.absolutePath
+        val p = Pty.open(80, 24, program, programArgs, cwd, env)
+        requireNotNull(p) { "failed to open pty for $program" }
         pty = p
 
         view.attach(handle, this)

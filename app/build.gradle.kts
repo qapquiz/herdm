@@ -27,6 +27,15 @@ android {
         }
     }
 
+    packaging {
+        // mosh-client and its libs must be REAL files in nativeLibraryDir
+        // (exec'd directly, not dlopen'd) — uncompressed-in-APK packaging
+        // leaves nativeLibraryDir empty on API 23+.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -40,6 +49,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.google.android.material:material:1.12.0")
     // SSH transport to herdr-core (`ssh host hc connect`)
     implementation("com.hierynomus:sshj:0.38.0")

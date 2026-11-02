@@ -23,6 +23,7 @@ data class HostConfig(
     var command: String = "hc connect",
     var session: String = "default",
     var hostKeyFingerprint: String? = null,
+    var transport: String = "ssh", // "ssh" (herdr) | "mosh"
 )
 
 object HostStore {
@@ -48,6 +49,7 @@ object HostStore {
                     command = o.optString("command", "hc connect").ifEmpty { "hc connect" },
                     session = o.optString("session", "default").ifEmpty { "default" },
                     hostKeyFingerprint = o.optString("hostKeyFingerprint", "").ifEmpty { null },
+                    transport = o.optString("transport", "ssh").ifEmpty { "ssh" },
                 )
             }.toMutableList()
         }.getOrDefault(mutableListOf())
@@ -69,7 +71,8 @@ object HostStore {
                     .put("keyPassphrase", h.keyPassphrase ?: "")
                     .put("command", h.command)
                     .put("session", h.session)
-                    .put("hostKeyFingerprint", h.hostKeyFingerprint ?: ""),
+                    .put("hostKeyFingerprint", h.hostKeyFingerprint ?: "")
+                    .put("transport", h.transport),
             )
         }
         file(ctx).writeText(arr.toString(2))
