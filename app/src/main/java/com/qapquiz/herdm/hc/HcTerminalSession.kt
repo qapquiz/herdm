@@ -1,9 +1,9 @@
-package dev.nullphase.ghostty.hc
+package com.qapquiz.herdm.hc
 
 import android.os.Handler
 import android.os.Looper
-import dev.nullphase.ghostty.GhosttyTerminalView
-import dev.nullphase.ghostty.TerminalLink
+import com.qapquiz.herdm.GhosttyTerminalView
+import com.qapquiz.herdm.TerminalLink
 
 /** Process-wide connection holder: exactly one herdr-core link per app run. */
 object HcApp {

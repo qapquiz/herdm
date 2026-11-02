@@ -1,4 +1,4 @@
-package dev.nullphase.ghostty
+package com.qapquiz.herdm
 
 /**
  * PTY transport (native side: src/main/cpp/pty_jni.cpp). Owns a fork/exec'd

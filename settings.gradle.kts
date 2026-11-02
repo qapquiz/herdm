@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ghostty-android"
+rootProject.name = "herdm"
 include(":app")

@@ -1,4 +1,4 @@
-// PTY transport for dev.nullphase.ghostty.Pty: open a pty pair, fork/exec a
+// PTY transport for com.qapquiz.herdm.Pty: open a pty pair, fork/exec a
 // shell with the slave as controlling terminal, and expose read/write/resize
 // to Kotlin. The view/state machine stays in TerminalSession; this file only
 // moves bytes.
@@ -44,7 +44,7 @@ extern "C" {
 
 // Returns [pid, masterFd] as a 2-element jintArray, or null on failure.
 JNIEXPORT jintArray JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeOpen(
+Java_com_qapquiz_herdm_Pty_nativeOpen(
     JNIEnv* env, jobject, jint cols, jint rows, jstring shell, jobjectArray args,
     jstring cwd, jobjectArray envp) {
   const char* shellUtf = env->GetStringUTFChars(shell, nullptr);
@@ -138,7 +138,7 @@ Java_dev_nullphase_ghostty_Pty_nativeOpen(
 
 // Blocking read of PTY output. Returns bytes read (0 = EOF), -1 on error.
 JNIEXPORT jint JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeRead(
+Java_com_qapquiz_herdm_Pty_nativeRead(
     JNIEnv* env, jobject, jint fd, jbyteArray data) {
   if (fd < 0 || data == nullptr) return -1;
   const jsize cap = env->GetArrayLength(data);
@@ -155,7 +155,7 @@ Java_dev_nullphase_ghostty_Pty_nativeRead(
 
 // Writes all bytes; returns total written or -1 on error.
 JNIEXPORT jint JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeWrite(
+Java_com_qapquiz_herdm_Pty_nativeWrite(
     JNIEnv* env, jobject, jint fd, jbyteArray data) {
   if (fd < 0 || data == nullptr) return -1;
   const jsize len = env->GetArrayLength(data);
@@ -178,7 +178,7 @@ Java_dev_nullphase_ghostty_Pty_nativeWrite(
 // Sets the pty window size; the kernel delivers SIGWINCH to the foreground
 // process group.
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeResize(
+Java_com_qapquiz_herdm_Pty_nativeResize(
     JNIEnv*, jobject, jint fd, jint cols, jint rows) {
   if (fd < 0) return;
   winsize ws{};
@@ -188,14 +188,14 @@ Java_dev_nullphase_ghostty_Pty_nativeResize(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeSignal(
+Java_com_qapquiz_herdm_Pty_nativeSignal(
     JNIEnv*, jobject, jint pid, jint sig) {
   if (pid > 0) kill(static_cast<pid_t>(pid), sig);
 }
 
 // Blocking waitpid; returns the raw wait status (decode Kotlin-side).
 JNIEXPORT jint JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeWaitPid(
+Java_com_qapquiz_herdm_Pty_nativeWaitPid(
     JNIEnv*, jobject, jint pid) {
   if (pid <= 0) return -1;
   int status = 0;
@@ -207,7 +207,7 @@ Java_dev_nullphase_ghostty_Pty_nativeWaitPid(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_Pty_nativeCloseFd(JNIEnv*, jobject, jint fd) {
+Java_com_qapquiz_herdm_Pty_nativeCloseFd(JNIEnv*, jobject, jint fd) {
   if (fd >= 0) close(fd);
 }
 

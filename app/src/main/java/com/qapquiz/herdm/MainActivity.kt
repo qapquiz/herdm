@@ -1,10 +1,10 @@
-package dev.nullphase.ghostty
+package com.qapquiz.herdm
 
 import android.app.Activity
 import android.os.Bundle
 import android.widget.Toast
-import dev.nullphase.ghostty.hc.AccessoryBar
-import dev.nullphase.ghostty.hc.applyInsets
+import com.qapquiz.herdm.hc.AccessoryBar
+import com.qapquiz.herdm.hc.applyInsets
 
 class MainActivity : Activity() {
     private var session: TerminalSession? = null

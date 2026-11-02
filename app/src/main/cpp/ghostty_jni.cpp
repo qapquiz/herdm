@@ -1,4 +1,4 @@
-// JNI bridge between dev.nullphase.ghostty.NativeTerminal and libghostty-vt.
+// JNI bridge between com.qapquiz.herdm.NativeTerminal and libghostty-vt.
 //
 // One native handle owns a terminal, its render state, reusable row/cell
 // iterators, and a key encoder. All NativeTerminal calls happen on the
@@ -262,7 +262,7 @@ uint32_t appendUtf16(uint32_t cp, uint16_t* out, uint32_t used, uint32_t cap) {
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeCreate(
+Java_com_qapquiz_herdm_NativeTerminal_nativeCreate(
     JNIEnv*, jobject, jint cols, jint rows, jlong maxScrollback) {
   auto* session = new Session();
   GhosttyTerminalOptions opts{};
@@ -305,12 +305,12 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeCreate(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeFree(JNIEnv*, jobject, jlong handle) {
+Java_com_qapquiz_herdm_NativeTerminal_nativeFree(JNIEnv*, jobject, jlong handle) {
   destroySession(fromHandle(handle));
 }
 
 JNIEXPORT jbyteArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeWrite(
+Java_com_qapquiz_herdm_NativeTerminal_nativeWrite(
     JNIEnv* env, jobject, jlong handle, jbyteArray data) {
   auto* session = fromHandle(handle);
   if (session == nullptr || data == nullptr) return nullptr;
@@ -334,7 +334,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeWrite(
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeTakeEventFlags(
+Java_com_qapquiz_herdm_NativeTerminal_nativeTakeEventFlags(
     JNIEnv*, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return 0;
@@ -344,7 +344,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeTakeEventFlags(
 }
 
 JNIEXPORT jbyteArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeGetTitle(
+Java_com_qapquiz_herdm_NativeTerminal_nativeGetTitle(
     JNIEnv* env, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return nullptr;
@@ -352,7 +352,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeGetTitle(
 }
 
 JNIEXPORT jbyteArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeGetPwd(
+Java_com_qapquiz_herdm_NativeTerminal_nativeGetPwd(
     JNIEnv* env, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return nullptr;
@@ -360,7 +360,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeGetPwd(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeResize(
+Java_com_qapquiz_herdm_NativeTerminal_nativeResize(
     JNIEnv*, jobject, jlong handle, jint cols, jint rows, jint cellWidthPx, jint cellHeightPx) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return;
@@ -378,7 +378,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeResize(
 // palette; per-index OSC 4 overrides set by the running program are
 // preserved by the terminal.
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeSetTheme(
+Java_com_qapquiz_herdm_NativeTerminal_nativeSetTheme(
     JNIEnv* env, jobject, jlong handle, jstring foreground, jstring background,
     jstring cursor, jobjectArray palette) {
   auto* session = fromHandle(handle);
@@ -414,14 +414,14 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeSetTheme(
 // Parses a color in ghostty syntax to ARGB, or 0 when invalid (real colors
 // always carry 0xFF alpha, so 0 is never a valid result).
 JNIEXPORT jint JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeParseColor(
+Java_com_qapquiz_herdm_NativeTerminal_nativeParseColor(
     JNIEnv* env, jobject, jstring color) {
   GhosttyColorRgb rgb{};
   return parseColor(env, color, &rgb) ? argb(rgb) : 0;
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeScroll(
+Java_com_qapquiz_herdm_NativeTerminal_nativeScroll(
     JNIEnv*, jobject, jlong handle, jint deltaRows) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return;
@@ -432,7 +432,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeScroll(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeScrollToBottom(
+Java_com_qapquiz_herdm_NativeTerminal_nativeScrollToBottom(
     JNIEnv*, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return;
@@ -444,7 +444,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeScrollToBottom(
 // Packs the viewport scrollbar as [total, offset, len] rows, or null when
 // there is no scrollback to indicate.
 JNIEXPORT jlongArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeScrollbar(
+Java_com_qapquiz_herdm_NativeTerminal_nativeScrollbar(
     JNIEnv* env, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return nullptr;
@@ -463,7 +463,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeScrollbar(
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeSnapshot(
+Java_com_qapquiz_herdm_NativeTerminal_nativeSnapshot(
     JNIEnv* env, jobject, jlong handle, jobject buffer) {
   auto* session = fromHandle(handle);
   if (session == nullptr || buffer == nullptr) return -1;
@@ -692,7 +692,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeSnapshot(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeSelectWord(
+Java_com_qapquiz_herdm_NativeTerminal_nativeSelectWord(
     JNIEnv*, jobject, jlong handle, jint col, jint row) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return JNI_FALSE;
@@ -711,7 +711,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeSelectWord(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeSelectAll(JNIEnv*, jobject, jlong handle) {
+Java_com_qapquiz_herdm_NativeTerminal_nativeSelectAll(JNIEnv*, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return JNI_FALSE;
   GhosttySelection selection{};
@@ -723,7 +723,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeSelectAll(JNIEnv*, jobject, jlon
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeSetSelection(
+Java_com_qapquiz_herdm_NativeTerminal_nativeSetSelection(
     JNIEnv*, jobject, jlong handle, jint anchorCol, jint anchorRow, jint col, jint row) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return JNI_FALSE;
@@ -744,7 +744,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeSetSelection(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeClearSelection(JNIEnv*, jobject, jlong handle) {
+Java_com_qapquiz_herdm_NativeTerminal_nativeClearSelection(JNIEnv*, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return;
   ghostty_terminal_set(session->term, GHOSTTY_TERMINAL_OPT_SELECTION, nullptr);
@@ -754,7 +754,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeClearSelection(JNIEnv*, jobject,
 // Returns the active selection as UTF-8 bytes (plain, unwrapped, trimmed —
 // Ghostty's copy semantics), or null when there is no selection.
 JNIEXPORT jbyteArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeSelectionText(
+Java_com_qapquiz_herdm_NativeTerminal_nativeSelectionText(
     JNIEnv* env, jobject, jlong handle) {
   auto* session = fromHandle(handle);
   if (session == nullptr) return nullptr;
@@ -785,7 +785,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeSelectionText(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeIsPasteSafe(
+Java_com_qapquiz_herdm_NativeTerminal_nativeIsPasteSafe(
     JNIEnv* env, jobject, jbyteArray data) {
   if (data == nullptr) return JNI_TRUE;
   const jsize len = env->GetArrayLength(data);
@@ -800,7 +800,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeIsPasteSafe(
 // Encode clipboard text for the PTY: strips unsafe control bytes and wraps in
 // bracketed-paste sequences when the terminal has mode 2004 set.
 JNIEXPORT jbyteArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeEncodePaste(
+Java_com_qapquiz_herdm_NativeTerminal_nativeEncodePaste(
     JNIEnv* env, jobject, jlong handle, jbyteArray data) {
   auto* session = fromHandle(handle);
   if (session == nullptr || data == nullptr) return nullptr;
@@ -832,7 +832,7 @@ Java_dev_nullphase_ghostty_NativeTerminal_nativeEncodePaste(
 }
 
 JNIEXPORT jbyteArray JNICALL
-Java_dev_nullphase_ghostty_NativeTerminal_nativeEncodeKey(
+Java_com_qapquiz_herdm_NativeTerminal_nativeEncodeKey(
     JNIEnv* env, jobject, jlong handle, jint keyCode, jint action, jint metaState,
     jint unshiftedCodepoint, jbyteArray utf8) {
   auto* session = fromHandle(handle);

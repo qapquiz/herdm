@@ -1,13 +1,13 @@
-package dev.nullphase.ghostty.hc
+package com.qapquiz.herdm.hc
 
 import android.os.Bundle
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import dev.nullphase.ghostty.GhosttyTerminalView
-import dev.nullphase.ghostty.Pty
-import dev.nullphase.ghostty.TerminalSession
+import com.qapquiz.herdm.GhosttyTerminalView
+import com.qapquiz.herdm.Pty
+import com.qapquiz.herdm.TerminalSession
 import java.io.File
 
 /** Full-screen terminal over a bundled mosh-client (UDP/SSP). */

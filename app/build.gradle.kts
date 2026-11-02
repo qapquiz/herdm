@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "dev.nullphase.ghostty"
+    namespace = "com.qapquiz.herdm"
     compileSdk = 36
     ndkVersion = "27.1.12297006"
 
     defaultConfig {
-        applicationId = "dev.nullphase.ghostty"
+        applicationId = "com.qapquiz.herdm"
         minSdk = 29 // x86_64 libghostty-vt needs bionic __tls_get_addr (API 29+)
         targetSdk = 36
         versionCode = 1

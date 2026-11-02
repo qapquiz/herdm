@@ -1,4 +1,4 @@
-package dev.nullphase.ghostty.hc
+package com.qapquiz.herdm.hc
 
 import android.content.Intent
 import android.os.Bundle

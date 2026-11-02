@@ -1,12 +1,12 @@
-package dev.nullphase.ghostty.hc
+package com.qapquiz.herdm.hc
 
 import android.os.Bundle
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import dev.nullphase.ghostty.GhosttyTerminalView
-import dev.nullphase.ghostty.NativeTerminal
+import com.qapquiz.herdm.GhosttyTerminalView
+import com.qapquiz.herdm.NativeTerminal
 
 /** Full-screen terminal over a herdr-core attach channel. */
 class HcTerminalActivity : AppCompatActivity() {

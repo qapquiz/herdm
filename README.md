@@ -1,4 +1,4 @@
-# ghostty-android
+# herdm
 
 Native Android terminal emulator built directly on
 [libghostty-vt](https://github.com/ghostty-org/ghostty) — Ghostty's core

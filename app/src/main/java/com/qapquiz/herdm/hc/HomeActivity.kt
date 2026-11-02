@@ -1,4 +1,4 @@
-package dev.nullphase.ghostty.hc
+package com.qapquiz.herdm.hc
 
 import android.content.Intent
 import android.net.Uri
@@ -16,7 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
-import dev.nullphase.ghostty.R
+import com.qapquiz.herdm.R
 import java.io.File
 import java.util.UUID
 

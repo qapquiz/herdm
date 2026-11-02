@@ -1,4 +1,4 @@
-package dev.nullphase.ghostty
+package com.qapquiz.herdm
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -24,7 +24,7 @@ import kotlin.math.roundToInt
 
 /**
  * What the view needs from a byte transport: local PTY ([TerminalSession])
- * or a herdr-core attach channel ([dev.nullphase.ghostty.hc.HcTerminalSession]).
+ * or a herdr-core attach channel ([com.qapquiz.herdm.hc.HcTerminalSession]).
  */
 interface TerminalLink {
     /** Bytes destined for the program (typed input, query replies). */

@@ -1,4 +1,4 @@
-package dev.nullphase.ghostty.hc
+package com.qapquiz.herdm.hc
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
