@@ -62,9 +62,14 @@ class TerminalSession(
 
     private fun readLoop(p: Pty) {
         val buf = ByteArray(16 * 1024)
+        var logged = false
         while (!closing) {
             val n = p.read(buf)
             if (n <= 0) break
+            if (!logged) {
+                logged = true
+                Log.i("mosh-out", String(buf, 0, n).replace("\u001b", "\\e").take(400))
+            }
             val chunk = buf.copyOf(n)
             mainHandler.post { if (!closing) view.feed(chunk) }
         }
