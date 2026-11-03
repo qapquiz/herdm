@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.widget.Toast
 import com.qapquiz.herdm.hc.AccessoryBar
 import com.qapquiz.herdm.hc.applyInsets
+import com.qapquiz.herdm.hc.confirmPaste
 
 class MainActivity : Activity() {
     private var session: TerminalSession? = null
@@ -34,6 +35,7 @@ class MainActivity : Activity() {
                 this,
                 onKey = { keyCode, meta -> view.sendEncodedKey(keyCode, meta) },
                 onText = { text -> view.sendRawText(text) },
+                onPaste = { text -> confirmPaste(this, text) { view.paste(text) } },
             ),
             android.widget.LinearLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,

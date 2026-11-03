@@ -126,6 +126,14 @@ Terminals needing attention sort to the top of their group in the list.
 The list's agent badge is `status.app` (core 0.1.15 has no
 `Terminal.agent` field; `hc ls`'s "agent" column is derived from it too).
 
+### Paste
+
+The accessory bar's **paste** button reads the clipboard and sends it
+through `nativeEncodePaste` (libghostty's `ghostty_paste_encode`): unsafe
+control bytes are stripped and the text is wrapped in bracketed-paste
+markers when the program set mode 2004. Text with newlines asks first
+("Paste N lines?" — a newline acts as Enter); empty clipboard toasts.
+
 Test recipe (drives status on a real core): `hc run --bg sh -c 'printf
 "\033]7501;state=blocked:app=x:kind=question:msg=<base64>\033\\\\"; sleep
 N'` — pairs are COLON-separated, `msg`/`title` are base64 (protocol:

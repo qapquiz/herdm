@@ -184,8 +184,16 @@ drawables (`android.R.drawable.*`).
    tapping a notification deep-links into the terminal (works); no
    actions on the notification itself; POST_NOTIFICATIONS asked only
    when the toggle goes on.
-2. Touch drag-handle selection (long-press word copy exists).
-3. Paste from app UI (encode path already native — `nativeEncodePaste`).
+2. ~~Touch drag-handle selection~~ next up (long-press word copy exists).
+3. ~~Paste from app UI~~ DONE (2026-11-03): AccessoryBar paste button
+   (all three screens: hc/mosh/demo) → `confirmPaste` multi-line guard →
+   `GhosttyTerminalView.paste` → `nativeEncodePaste` (control-byte strip +
+   mode-2004 bracketing). Empty clipboard toasts. E2E byte-verified via
+   `head -c 200 | od -c` probe. NOT e2e-exercised: the multi-line dialog
+   branch (no adb path seeds a multi-line clipboard on API 35; word copy
+   is single-line) — code-reviewed only. Testing gotcha: `input keyevent
+   111` is ESC and reaches the terminal; the IME hides the accessory bar
+   (adjustResize doesn't work edge-to-edge without IME insets — pre-existing).
 4. Nerd Font symbols (PUA cells render as boxes today).
 5. Scrollback fling physics (plain drag now).
 6. EncryptedSharedPreferences (same as #4 above).

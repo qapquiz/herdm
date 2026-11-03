@@ -158,6 +158,14 @@ class GhosttyTerminalView @JvmOverloads constructor(
         if (handle != 0L) link?.sendUtf8(text)
     }
 
+    /** Clipboard paste: the native encoder strips unsafe control bytes and
+     *  wraps in bracketed-paste markers when the program set mode 2004. */
+    internal fun paste(text: String) {
+        if (handle == 0L || text.isEmpty()) return
+        val encoded = NativeTerminal.nativeEncodePaste(handle, text.toByteArray(Charsets.UTF_8))
+        if (encoded != null && encoded.isNotEmpty()) link?.send(encoded)
+    }
+
     var fontSize: Float
         get() = fontSizeSp
         set(value) {

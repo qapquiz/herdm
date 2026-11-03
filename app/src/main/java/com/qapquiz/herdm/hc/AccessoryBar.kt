@@ -17,6 +17,7 @@ class AccessoryBar(
     context: Context,
     private val onKey: (keyCode: Int, meta: Int) -> Unit,
     private val onText: (text: String) -> Unit,
+    private val onPaste: (text: String) -> Unit,
 ) : HorizontalScrollView(context) {
     private var stickyCtrl = false
     private var stickyAlt = false
@@ -44,6 +45,19 @@ class AccessoryBar(
         fun text(label: String, literal: String) {
             row.addView(button(label) { onText(literal) })
         }
+
+        // Paste reads the clipboard here; wiring confirms multi-line pastes.
+        row.addView(
+            button("paste") {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                if (clip.isNullOrEmpty()) {
+                    android.widget.Toast.makeText(context, "Clipboard is empty", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    onPaste(clip)
+                }
+            },
+        )
 
         key("esc", android.view.KeyEvent.KEYCODE_ESCAPE)
         key("tab", android.view.KeyEvent.KEYCODE_TAB)
