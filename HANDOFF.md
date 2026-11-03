@@ -184,7 +184,7 @@ drawables (`android.R.drawable.*`).
    tapping a notification deep-links into the terminal (works); no
    actions on the notification itself; POST_NOTIFICATIONS asked only
    when the toggle goes on.
-2. ~~Touch drag-handle selection~~ next up (long-press word copy exists).
+2. Touch drag-handle selection — NEXT UP (long-press word copy exists).
 3. ~~Paste from app UI~~ DONE (2026-11-03): AccessoryBar paste button
    (all three screens: hc/mosh/demo) → `confirmPaste` multi-line guard →
    `GhosttyTerminalView.paste` → `nativeEncodePaste` (control-byte strip +
