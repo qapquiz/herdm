@@ -76,6 +76,11 @@ class HcConnection {
     var alive = false
         private set
 
+    /** The host this connection is configured for (null until start()). */
+    @Volatile
+    var hostConfig: HostConfig? = null
+        private set
+
     /** Fingerprint accepted during the latest connect (TOFU store side). */
     @Volatile var negotiatedHostKey: String? = null
         private set
@@ -127,6 +132,7 @@ class HcConnection {
      */
     fun start(host: HostConfig, onReady: (JSONObject) -> Unit, onError: (String) -> Unit) {
         this.host = host
+        this.hostConfig = host
         negotiatedHostKey = null
         hostKeyMismatch = false
         wantConnection.set(true)

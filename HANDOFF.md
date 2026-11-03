@@ -93,6 +93,16 @@ reconnect + rate guards), `Framed`/`JsonAssembler` (wire codec),
 `TerminalsActivity` (live list), `HcTerminalActivity` (attach screen),
 `MoshBootstrap`/`MoshTerminalActivity` (mosh), `AccessoryBar`,
 `MoshTerminalSession.kt` is `HcTerminalSession.kt`.
+Agent alerts (2026-11-03): `AgentWatch` (object, app-scoped watcher:
+own `events.subscribe` channel, blocked/error → heads-up notifications,
+reconciles via `terminal.list`) + `AgentWatchService` (specialUse FGS
+behind the Home toggle; owns the connection when it created it; START_STICKY
+re-reads the persisted host id from prefs `herdm`). Invariant: whoever
+replaces `HcApp.connection` stops the previous one first. Home reuses a
+live same-host connection without re-`start()` — never call
+`HcConnection.start()` on an already-running connection (supervisor
+would race). App ships NO icon assets — notifications must use platform
+drawables (`android.R.drawable.*`).
 
 ## Threading model (do not break)
 
@@ -163,12 +173,17 @@ reconnect + rate guards), `Framed`/`JsonAssembler` (wire codec),
 
 ## Backlog (agreed next steps, in rough priority)
 
-1. **Agent-status notifications** (user asked; next up): heads-up
-   notification when any terminal enters `blocked`/`error` — data already
-   flows (`events.subscribe` facts, `status.state`). OPEN DECISION: notify
-   only while app is open vs persistent **foreground service** so
-   lock-screen alerts survive swipe-away. Also: agent-kind badge
-   (`Terminal.agent` field, e.g. "pi") and "needs you first" sort.
+1. ~~**Agent-status notifications**~~ DONE (2026-11-03, user picked
+   "in-app first, then FGS behind a toggle" — both shipped in one commit):
+   heads-up on `blocked`/`error`, in-place update without re-buzz,
+   cancel on clear/finish/remove, reconcile on reconnect; foreground
+   service behind the Home toggle ("Alert when an agent needs you"),
+   survives swipe-away and process kill. List: needs-you-first sort +
+   `status.app` badge (no `Terminal.agent` field in core 0.1.15).
+   Status recipe for testing in README "Agent alerts". Left as-is:
+   tapping a notification deep-links into the terminal (works); no
+   actions on the notification itself; POST_NOTIFICATIONS asked only
+   when the toggle goes on.
 2. Touch drag-handle selection (long-press word copy exists).
 3. Paste from app UI (encode path already native — `nativeEncodePaste`).
 4. Nerd Font symbols (PUA cells render as boxes today).

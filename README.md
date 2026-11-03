@@ -104,6 +104,34 @@ client. Flow: **Home** (saved SSH hosts) → **Terminals** (live list with
 OSC 7501 status dots) → **Terminal** (attach channel in the same renderer
 used for the local PTY demo).
 
+### Agent alerts
+
+Terminals that report `blocked` or `error` over OSC 7501 raise a heads-up
+notification ("blocked · question · <msg>", title = name + agent badge from
+`status.app`). `AgentWatch` (app-scoped singleton) runs its own
+`events.subscribe` channel, dedups one notification per terminal (id =
+address hash), updates `blocked`↔`error` in place without re-alerting,
+and cancels when the state clears, the terminal finishes, or is removed.
+Reconnects and unknown facts reconcile against a fresh `terminal.list`.
+
+The **"Alert when an agent needs you"** toggle on Home starts
+`AgentWatchService`, a `specialUse` foreground service that keeps the
+connection alive past swipe-away (START_STICKY; re-reads the persisted
+host id after a process kill and re-reconciles, so still-blocked
+terminals re-alert). Invariant: whoever replaces `HcApp.connection`
+stops the previous one first (Home, service, Terminals teardown all
+follow it). With the service off, alerts exist only while the hc screens'
+connection lives (it dies when you back out of Terminals, like before).
+Terminals needing attention sort to the top of their group in the list.
+The list's agent badge is `status.app` (core 0.1.15 has no
+`Terminal.agent` field; `hc ls`'s "agent" column is derived from it too).
+
+Test recipe (drives status on a real core): `hc run --bg sh -c 'printf
+"\033]7501;state=blocked:app=x:kind=question:msg=<base64>\033\\\\"; sleep
+N'` — pairs are COLON-separated, `msg`/`title` are base64 (protocol:
+thebestterminal.com/docs/program-status). Note `hc send` into a `cat`
+terminal is unreliable for status testing (later reports get dropped).
+
 ## Mosh transport
 
 Hosts with **transport = mosh** skip herdr entirely: Home → tap → full-screen

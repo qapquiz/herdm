@@ -221,7 +221,8 @@ class TerminalsActivity : AppCompatActivity() {
         return n
     }
 
-    /** Local terminals first, then one section per machine in list order. */
+    /** Local terminals first, then one section per machine in list order.
+     *  Within a group, terminals that need the user (blocked/error) sort first. */
     private fun buildRows(): List<Row> {
         val rows = mutableListOf<Row>()
         val local = mutableListOf<JSONObject>()
@@ -239,6 +240,11 @@ class TerminalsActivity : AppCompatActivity() {
             val owner = machineNames.firstOrNull { address.startsWith("$it/") }
             if (owner != null) byMachine.getValue(owner).add(t) else local.add(t)
         }
+        val needsYou = Comparator<JSONObject> { a, b ->
+            (if (needsAttention(b)) 1 else 0) - (if (needsAttention(a)) 1 else 0)
+        }
+        local.sortWith(needsYou)
+        byMachine.values.forEach { it.sortWith(needsYou) }
         rows.add(Row(hostName, null))
         local.forEach { rows.add(Row(null, it)) }
         for (name in machineNames) {
@@ -250,6 +256,13 @@ class TerminalsActivity : AppCompatActivity() {
             byMachine[name]?.forEach { rows.add(Row(null, it)) }
         }
         return rows
+    }
+
+    /** blocked or error and still live: the user has to act on these. */
+    private fun needsAttention(t: JSONObject): Boolean {
+        if (!t.isNull("finished_ms")) return false
+        val state = t.optJSONObject("status")?.optString("state")
+        return state == "blocked" || state == "error"
     }
 
     private fun scheduleRefresh() {
@@ -317,9 +330,14 @@ class TerminalsActivity : AppCompatActivity() {
             return Triple("shell", 0xFF616161.toInt(), "shell")
         }
         val color = statusColor[state] ?: 0xFF616161.toInt()
+        val app = status.optString("app").takeUnless { it.isEmpty() || it == "null" }
         val msg = status.optString("msg")
         val progress = if (!status.isNull("progress")) " ${status.optInt("progress")}%" else ""
-        val label = state + progress + if (msg.isNotEmpty() && msg != "null") " · $msg" else ""
+        val label = listOfNotNull(
+            app,
+            state + progress,
+            msg.takeIf { it.isNotEmpty() && it != "null" },
+        ).joinToString(" · ")
         return Triple(state, color, label)
     }
 
@@ -376,8 +394,12 @@ class TerminalsActivity : AppCompatActivity() {
         if (isFinishing && this::conn.isInitialized) {
             if (eventsChannel > 0) conn.closeChannel(eventsChannel)
             conn.unregisterReconnect(reconnectId)
-            conn.stop()
-            HcApp.connection = null
+            if (!AgentWatchService.running) {
+                // No background watch: the connection dies with the screen.
+                AgentWatch.unbind(conn)
+                conn.stop()
+                HcApp.connection = null
+            }
         }
         super.onDestroy()
     }

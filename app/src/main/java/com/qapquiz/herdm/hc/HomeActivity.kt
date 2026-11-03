@@ -1,7 +1,10 @@
 package com.qapquiz.herdm.hc
 
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -13,7 +16,9 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
 import com.qapquiz.herdm.R
@@ -24,8 +29,14 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var hosts: MutableList<HostConfig>
     private lateinit var list: ListView
     private lateinit var empty: TextView
+    private lateinit var watchToggle: MaterialSwitch
     private var pendingKeyTarget: TextView? = null
     private var dialogHost: HostConfig? = null
+
+    private val notifPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) toast("No notification permission: alerts stay silent")
+        }
 
     private val keyPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         uri ?: return@registerForActivityResult
@@ -43,15 +54,41 @@ class HomeActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_home)
         applyInsets(findViewById(R.id.home_root))
+        AgentWatch.provideContext(this)
         hosts = HostStore.load(this)
         list = findViewById(R.id.hosts)
         empty = findViewById(R.id.empty)
+        watchToggle = findViewById(R.id.watch_toggle)
         list.adapter = HostAdapter()
         list.setOnItemClickListener { _, _, pos, _ -> confirmConnect(hosts[pos]) }
         list.setOnItemLongClickListener { _, _, pos, _ ->
             hostOptions(hosts[pos]); true
         }
         findViewById<View>(R.id.add).setOnClickListener { showHostDialog(null) }
+
+        // Toggle reflects persisted state; when enabled and not running
+        // (fresh process), restart the background watch on the last host.
+        watchToggle.isChecked = AgentWatchService.enabled(this)
+        watchToggle.setOnCheckedChangeListener { _, checked ->
+            AgentWatchService.setEnabled(this, checked)
+            if (checked) {
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED
+                ) {
+                    notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                val live = HcApp.connection?.takeIf { it.alive }?.hostConfig?.id
+                AgentWatchService.start(this, live)
+            } else {
+                AgentWatchService.stop(this)
+            }
+        }
+        if (AgentWatchService.enabled(this) && !AgentWatchService.running) {
+            val live = HcApp.connection?.takeIf { it.alive }?.hostConfig?.id
+            AgentWatchService.start(this, live)
+        }
+
         render()
     }
 
@@ -223,13 +260,29 @@ class HomeActivity : AppCompatActivity() {
             return
         }
         val existing = HcApp.connection
-        val conn = if (existing != null && existing.alive) existing else {
-            HcConnection().also {
-                HcApp.connection = it
-                it.listener = object : HcConnection.Listener {
-                    override fun onDisconnected(reason: String?) {
-                        runOnUiThread { toast("Disconnected: ${reason ?: "stream ended"}") }
-                    }
+        if (existing != null && existing.alive && existing.hostConfig == host) {
+            // Already live (e.g. the background watch owns it): use as-is.
+            AgentWatch.bind(existing)
+            startActivity(
+                Intent(this, TerminalsActivity::class.java)
+                    .putExtra("hostId", host.id)
+                    .putExtra("hostName", host.name),
+            )
+            return
+        }
+        // Replacing a connection (different host, or a dead shell): the
+        // invariant is whoever replaces HcApp.connection stops the old one.
+        if (existing != null) {
+            existing.listener = null // no spurious "disconnected" toast
+            AgentWatch.unbind(existing)
+            existing.stop()
+            HcApp.connection = null
+        }
+        val conn = HcConnection().also {
+            HcApp.connection = it
+            it.listener = object : HcConnection.Listener {
+                override fun onDisconnected(reason: String?) {
+                    runOnUiThread { toast("Disconnected: ${reason ?: "stream ended"}") }
                 }
             }
         }
@@ -249,6 +302,8 @@ class HomeActivity : AppCompatActivity() {
                     host.hostKeyFingerprint = fp
                     HostStore.update(this, host)
                 }
+                AgentWatchService.rememberHost(this, host.id)
+                AgentWatch.bind(conn)
                 toast("connected: core ${hello.optString("version")} (gen ${hello.opt("generation")})")
                 startActivity(
                     Intent(this, TerminalsActivity::class.java)

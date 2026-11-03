@@ -20,6 +20,13 @@
         android:textSize="13sp"
         android:alpha="0.6" />
 
+    <com.google.android.material.materialswitch.MaterialSwitch
+        android:id="@+id/watch_toggle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Alert when an agent needs you" />
+
     <ListView
         android:id="@+id/hosts"
         android:layout_width="match_parent"
