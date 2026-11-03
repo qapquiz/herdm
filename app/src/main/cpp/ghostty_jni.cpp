@@ -691,23 +691,46 @@ Java_com_qapquiz_herdm_NativeTerminal_nativeSnapshot(
   return rowCount;
 }
 
-JNIEXPORT jboolean JNICALL
+// Converts one grid-ref component to viewport coordinates; -1 on failure.
+static jint viewportCoord(Session* session, const GhosttyGridRef& ref, bool isX) {
+  GhosttyPointCoordinate coord{};
+  if (ghostty_terminal_point_from_grid_ref(session->term, &ref,
+                                           GHOSTTY_POINT_TAG_VIEWPORT, &coord) !=
+      GHOSTTY_SUCCESS) {
+    return -1;
+  }
+  return isX ? static_cast<jint>(coord.x) : static_cast<jint>(coord.y);
+}
+
+JNIEXPORT jintArray JNICALL
 Java_com_qapquiz_herdm_NativeTerminal_nativeSelectWord(
-    JNIEnv*, jobject, jlong handle, jint col, jint row) {
+    JNIEnv* env, jobject, jlong handle, jint col, jint row) {
   auto* session = fromHandle(handle);
-  if (session == nullptr) return JNI_FALSE;
+  if (session == nullptr) return nullptr;
   GhosttyGridRef ref{};
   ref.size = sizeof(ref);
-  if (!viewportGridRef(session, col, row, &ref)) return JNI_FALSE;
+  if (!viewportGridRef(session, col, row, &ref)) return nullptr;
   GhosttyTerminalSelectWordOptions options{};
   options.size = sizeof(options);
   options.ref = ref;
   GhosttySelection selection{};
   selection.size = sizeof(selection);
   if (ghostty_terminal_select_word(session->term, &options, &selection) != GHOSTTY_SUCCESS) {
-    return JNI_FALSE;
+    return nullptr;
   }
-  return installSelection(session, &selection) ? JNI_TRUE : JNI_FALSE;
+  if (!installSelection(session, &selection)) return nullptr;
+  // Selection endpoints in viewport cells for drag-handle placement; -1 when
+  // an endpoint does not map into the current viewport (e.g. reflow races).
+  jint out[4] = {
+      viewportCoord(session, selection.start, true),
+      viewportCoord(session, selection.start, false),
+      viewportCoord(session, selection.end, true),
+      viewportCoord(session, selection.end, false),
+  };
+  jintArray arr = env->NewIntArray(4);
+  if (arr == nullptr) return nullptr;
+  env->SetIntArrayRegion(arr, 0, 4, out);
+  return arr;
 }
 
 JNIEXPORT jboolean JNICALL

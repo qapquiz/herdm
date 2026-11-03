@@ -126,13 +126,22 @@ Terminals needing attention sort to the top of their group in the list.
 The list's agent badge is `status.app` (core 0.1.15 has no
 `Terminal.agent` field; `hc ls`'s "agent" column is derived from it too).
 
-### Paste
+### Selection & paste
 
-The accessory bar's **paste** button reads the clipboard and sends it
-through `nativeEncodePaste` (libghostty's `ghostty_paste_encode`): unsafe
-control bytes are stripped and the text is wrapped in bracketed-paste
-markers when the program set mode 2004. Text with newlines asks first
-("Paste N lines?" — a newline acts as Enter); empty clipboard toasts.
+**Selection** (every terminal — hc, mosh, local): long-press selects the
+word and shows teardrop drag handles + a floating Copy toolbar (it no
+longer auto-copies). Drag a handle to extend/shrink — the anchor stays
+fixed and libghostty normalizes the order. Tap dismisses. The selection
+lives in the native terminal, so the highlight and the copied text stay
+correct across scrolling and in scrollback. Drag stays within the
+visible viewport (no autoscroll-into-history drag).
+
+**Paste**: the accessory bar's **paste** button reads the clipboard and
+sends it through `nativeEncodePaste` (libghostty's
+`ghostty_paste_encode`): unsafe control bytes are stripped and the text
+is wrapped in bracketed-paste markers when the program set mode 2004.
+`nativeIsPasteSafe` gates it: text with newlines or bracketed-paste
+escapes asks first (a newline acts as Enter); empty clipboard toasts.
 
 Test recipe (drives status on a real core): `hc run --bg sh -c 'printf
 "\033]7501;state=blocked:app=x:kind=question:msg=<base64>\033\\\\"; sleep
@@ -240,8 +249,6 @@ connect`): list, `terminal.run`, attach, typing, output rendering.
 
 ## Not yet implemented (obvious next steps)
 
-- Touch selection with drag handles (long-press word copy exists)
-- Clipboard paste from the app UI (paste encode/safety already wired natively)
 - Nerd Font symbols for private-use glyph cells
 - Mouse reporting for TUI apps (`ghostty_mouse_*` API)
 - Fling physics on scrollback (plain drag today)

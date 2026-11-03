@@ -5,7 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
 import android.view.inputmethod.BaseInputConnection
 import android.text.InputType
 import android.util.AttributeSet
@@ -79,6 +83,8 @@ class GhosttyTerminalView @JvmOverloads constructor(
         const val CELL_RECORD_BYTES = 16
         const val MAX_CELL_TEXT_UNITS = 32
         const val BLINK_MS = 530L
+        const val HANDLE_START = 1
+        const val HANDLE_END = 2
     }
 
     internal var link: TerminalLink? = null
@@ -98,6 +104,16 @@ class GhosttyTerminalView @JvmOverloads constructor(
     private val selectionPaint = Paint().apply { color = 0x4080C0FF.toInt() }
     private val cursorPaint = Paint()
     private val scrollbarPaint = Paint().apply { color = 0x40FFFFFF.toInt() }
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF80C0FF.toInt() }
+
+    // Drag-handle selection. selBounds is [startCol, startRow, endCol, endRow]
+    // in viewport cells; selAnchor is the fixed endpoint while one handle is
+    // being dragged. The authoritative selection lives in the native terminal;
+    // these mirror it for handle placement and touch routing.
+    private var selBounds: IntArray? = null
+    private var selAnchor: IntArray? = null
+    private var dragHandle = 0
+    private var actionMode: ActionMode? = null
 
     private val monoItalic: Typeface by lazy { Typeface.create(Typeface.MONOSPACE, Typeface.ITALIC) }
 
@@ -164,6 +180,13 @@ class GhosttyTerminalView @JvmOverloads constructor(
         if (handle == 0L || text.isEmpty()) return
         val encoded = NativeTerminal.nativeEncodePaste(handle, text.toByteArray(Charsets.UTF_8))
         if (encoded != null && encoded.isNotEmpty()) link?.send(encoded)
+    }
+
+    /** False when the text contains bytes that would act on the shell
+     *  (newlines, bracketed-paste escapes) and deserves a confirm dialog. */
+    internal fun isPasteSafe(text: String): Boolean {
+        if (handle == 0L || text.isEmpty()) return true
+        return NativeTerminal.nativeIsPasteSafe(text.toByteArray(Charsets.UTF_8))
     }
 
     var fontSize: Float
@@ -249,6 +272,7 @@ class GhosttyTerminalView @JvmOverloads constructor(
         canvas.drawBitmap(bitmap!!, 0f, 0f, null)
         drawCursor(canvas)
         drawScrollbar(canvas)
+        drawSelectionHandles(canvas)
         if (cursorVisible && cursorBlinking) postInvalidateDelayed(BLINK_MS)
     }
 
@@ -471,6 +495,12 @@ class GhosttyTerminalView @JvmOverloads constructor(
 
             override fun onSingleTapUp(e: MotionEvent): Boolean {
                 performClick()
+                if (selBounds != null) {
+                    // Selection active: first tap dismisses it (Android text
+                    // convention); only the next tap opens the keyboard.
+                    clearSelection()
+                    return true
+                }
                 requestFocus()
                 val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                 imm.showSoftInput(this@GhosttyTerminalView, 0)
@@ -481,16 +511,159 @@ class GhosttyTerminalView @JvmOverloads constructor(
                 if (handle == 0L) return
                 val col = (e.x / cellW).toInt()
                 val row = (e.y / cellH).toInt()
-                if (NativeTerminal.nativeSelectWord(handle, col, row)) {
-                    copySelectionToClipboard()
-                }
+                val bounds = NativeTerminal.nativeSelectWord(handle, col, row) ?: return
+                selBounds = bounds
+                selAnchor = null
+                dragHandle = 0
+                invalidate()
+                startSelectionToolbar()
             }
         },
     )
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (selectionDragTouch(event)) return true
         gestureDetector.onTouchEvent(event)
         return true
+    }
+
+    // ------------------------------------------------- drag-handle selection
+
+    /** True while the touch is driving a selection handle; keeps the
+     *  gesture detector (scroll) out of the way. */
+    private fun selectionDragTouch(event: MotionEvent): Boolean {
+        if (handle == 0L || cellW <= 0 || cellH <= 0) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val hit = hitHandle(event.x, event.y) ?: return false
+                dragHandle = hit
+                val b = selBounds!!
+                selAnchor = if (hit == HANDLE_START) intArrayOf(b[2], b[3]) else intArrayOf(b[0], b[1])
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (dragHandle == 0) return false
+                val a = selAnchor ?: return false
+                val col = (event.x / cellW).toInt().coerceIn(0, cols - 1)
+                val row = (event.y / cellH).toInt().coerceIn(0, rows - 1)
+                // Keep the anchor fixed, move the dragged endpoint; libghostty
+                // normalizes the order for rendering and selection text.
+                if (NativeTerminal.nativeSetSelection(handle, a[0], a[1], col, row)) {
+                    selBounds = if (dragHandle == HANDLE_START) {
+                        intArrayOf(col, row, a[0], a[1])
+                    } else {
+                        intArrayOf(a[0], a[1], col, row)
+                    }
+                    invalidate() // installSelection re-emits all rows; handles move live
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (dragHandle == 0) return false
+                dragHandle = 0
+                selAnchor = null
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun hitHandle(x: Float, y: Float): Int? {
+        val b = selBounds ?: return null
+        val slop = dp(14)
+        val (sx, sy) = handlePoint(b[0], b[1], true)
+        val (ex, ey) = handlePoint(b[2], b[3], false)
+        if (dist2(x, y, sx, sy) <= slop * slop) return HANDLE_START
+        if (dist2(x, y, ex, ey) <= slop * slop) return HANDLE_END
+        return null
+    }
+
+    private fun dist2(x: Float, y: Float, px: Float, py: Float): Float {
+        val dx = x - px
+        val dy = y - py
+        return dx * dx + dy * dy
+    }
+
+    /** Anchor pixel of a selection handle: start hangs above the first
+     *  selected row's top edge, end below the last selected row's bottom
+     *  edge. Coordinates clamp into the view. */
+    private fun handlePoint(col: Int, row: Int, start: Boolean): Pair<Float, Float> {
+        val r = row.coerceIn(0, (rows - 1).coerceAtLeast(0))
+        val c = col.coerceIn(0, cols)
+        val x = (c * cellW).toFloat()
+        val y = if (start) (r * cellH).toFloat() else ((r + 1) * cellH).toFloat()
+        return Pair(x, y)
+    }
+
+    private fun drawSelectionHandles(canvas: Canvas) {
+        val b = selBounds ?: return
+        if (cellW <= 0 || cellH <= 0 || width == 0 || height == 0) return
+        val rad = dp(7)
+        val (sx, sy) = handlePoint(b[0], b[1], true)
+        val (ex, ey) = handlePoint(b[2], b[3], false)
+        // Start handle above the selection start, tip pointing down onto it;
+        // end handle below the selection end, tip pointing up. Circle centers
+        // clamp into the view so edge selections stay grabbable.
+        drawTeardrop(canvas, sx, (sy - rad).coerceAtLeast(rad), sy.coerceAtLeast(0f), rad, pointingDown = true)
+        drawTeardrop(canvas, ex, (ey + rad).coerceAtMost(height - rad), ey.coerceAtMost(height.toFloat()), rad, pointingDown = false)
+    }
+
+    private fun drawTeardrop(canvas: Canvas, cx: Float, cy: Float, tipY: Float, rad: Float, pointingDown: Boolean) {
+        val path = Path()
+        path.addCircle(cx, cy, rad, Path.Direction.CW)
+        val half = rad * 0.6f
+        val baseY = cy + if (pointingDown) rad * 0.35f else -rad * 0.35f
+        path.moveTo(cx - half, baseY)
+        path.lineTo(cx, tipY)
+        path.lineTo(cx + half, baseY)
+        path.close()
+        canvas.drawPath(path, handlePaint)
+    }
+
+    private fun startSelectionToolbar() {
+        if (actionMode != null) {
+            actionMode!!.invalidate()
+            return
+        }
+        actionMode = startActionMode(
+            object : ActionMode.Callback {
+                override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                    menu.add(Menu.NONE, 1, Menu.NONE, "Copy")
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                    return true
+                }
+
+                override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean = false
+
+                override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                    if (item.itemId == 1) {
+                        copySelectionToClipboard()
+                        clearSelection()
+                        return true
+                    }
+                    return false
+                }
+
+                override fun onDestroyActionMode(mode: ActionMode) {
+                    actionMode = null
+                    if (selBounds != null) clearSelection()
+                }
+            },
+            ActionMode.TYPE_FLOATING,
+        )
+    }
+
+    private fun clearSelection() {
+        selBounds = null
+        selAnchor = null
+        dragHandle = 0
+        if (handle != 0L) NativeTerminal.nativeClearSelection(handle)
+        actionMode?.let { am ->
+            actionMode = null
+            am.finish()
+        }
+        invalidate()
     }
 
     internal fun scrollByRows(deltaRows: Int) {

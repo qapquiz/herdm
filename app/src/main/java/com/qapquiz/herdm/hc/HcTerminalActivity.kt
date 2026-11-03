@@ -45,7 +45,7 @@ class HcTerminalActivity : AppCompatActivity() {
                 this,
                 onKey = { keyCode, meta -> view.sendEncodedKey(keyCode, meta) },
                 onText = { text -> view.sendRawText(text) },
-                onPaste = { text -> confirmPaste(this, text) { view.paste(text) } },
+                onPaste = { text -> confirmPaste(this, text, !view.isPasteSafe(text)) { view.paste(text) } },
             ),
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,

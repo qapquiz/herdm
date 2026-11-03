@@ -184,14 +184,26 @@ drawables (`android.R.drawable.*`).
    tapping a notification deep-links into the terminal (works); no
    actions on the notification itself; POST_NOTIFICATIONS asked only
    when the toggle goes on.
-2. Touch drag-handle selection — NEXT UP (long-press word copy exists).
+2. ~~Touch drag-handle selection~~ DONE (2026-11-03): long-press word →
+   teardrop handles + floating Copy toolbar (replaces auto-copy-on-
+   long-press); drag either handle to extend/shrink (anchor fixed, other
+   end moves; libghostty normalizes order); tap clears; selection lives
+   in the native terminal so highlight + text survive scrolling and it
+   works in scrollback. `nativeSelectWord` now RETURNS viewport bounds
+   [startCol,startRow,endCol,endRow] (breaking JNI signature change) for
+   handle placement; drag goes through the existing `nativeSetSelection`.
+   Limits: drag stays within the visible viewport (no autoscroll-into-
+   history drag — needs the `ghostty_selection_gesture_*` engine if ever
+   wanted). E2E: drag→copy→paste round trip byte-verified with an od
+   probe; multi-line paste dialog finally e2e-exercised by the same loop.
 3. ~~Paste from app UI~~ DONE (2026-11-03): AccessoryBar paste button
-   (all three screens: hc/mosh/demo) → `confirmPaste` multi-line guard →
+   (all three screens: hc/mosh/demo) → `confirmPaste` guard →
    `GhosttyTerminalView.paste` → `nativeEncodePaste` (control-byte strip +
    mode-2004 bracketing). Empty clipboard toasts. E2E byte-verified via
-   `head -c 200 | od -c` probe. NOT e2e-exercised: the multi-line dialog
-   branch (no adb path seeds a multi-line clipboard on API 35; word copy
-   is single-line) — code-reviewed only. Testing gotcha: `input keyevent
+   `head -c 200 | od -c` probe. The guard uses `nativeIsPasteSafe`
+   (newlines + bracketed-paste escapes), wired 2026-11-03 with the
+   selection work; the multi-line dialog branch was e2e-exercised later
+   the same day (see #2). Testing gotcha: `input keyevent
    111` is ESC and reaches the terminal; the IME hides the accessory bar
    (adjustResize doesn't work edge-to-edge without IME insets — pre-existing).
 4. Nerd Font symbols (PUA cells render as boxes today).

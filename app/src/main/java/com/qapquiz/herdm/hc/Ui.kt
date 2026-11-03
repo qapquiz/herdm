@@ -16,19 +16,21 @@ fun applyInsets(root: View) {
 }
 
 /**
- * Paste with a multi-line guard: a newline in pasted text acts as Enter,
- * so desktop terminals confirm before running lines. Single-line pastes
- * go straight through; [paste] is invoked on confirm.
+ * Paste with a safety guard: newlines in pasted text act as Enter and other
+ * control bytes can act on the shell, so desktop terminals confirm first.
+ * [needsConfirm] comes from the terminal's paste-safety check; safe pastes
+ * go straight through and [paste] is invoked on confirm.
  */
-fun confirmPaste(activity: Context, text: String, paste: (String) -> Unit) {
-    val newlines = text.count { it == '\n' }
-    if (newlines == 0) {
+fun confirmPaste(activity: Context, text: String, needsConfirm: Boolean, paste: (String) -> Unit) {
+    if (!needsConfirm) {
         paste(text)
         return
     }
+    val newlines = text.count { it == '\n' }
+    val title = if (newlines > 0) "Paste ${newlines + 1} lines?" else "Paste?"
     AlertDialog.Builder(activity)
-        .setTitle("Paste ${newlines + 1} lines?")
-        .setMessage("Each newline acts as Enter in the terminal.")
+        .setTitle(title)
+        .setMessage("Newlines act as Enter in the terminal.")
         .setPositiveButton("Paste") { _, _ -> paste(text) }
         .setNegativeButton("Cancel", null)
         .show()

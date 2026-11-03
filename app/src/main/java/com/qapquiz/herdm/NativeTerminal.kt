@@ -87,8 +87,12 @@ object NativeTerminal {
         utf8: ByteArray?,
     ): ByteArray?
 
-    /** Select the word at a viewport cell; false when there is nothing there. */
-    external fun nativeSelectWord(handle: Long, col: Int, row: Int): Boolean
+    /** Select the word at a viewport cell and install it as the active
+     *  selection. Returns [startCol, startRow, endCol, endRow] in viewport
+     *  cells (for drag-handle placement), or null when there is nothing
+     *  there. A -1 coordinate means the endpoint did not map into the
+     *  viewport. */
+    external fun nativeSelectWord(handle: Long, col: Int, row: Int): IntArray?
 
     external fun nativeSelectAll(handle: Long): Boolean
 
